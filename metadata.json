@@ -1,0 +1,6 @@
+{
+  "name": "Beam Deformation & Stress Visualizer",
+  "description": "Interactive beam bending and tension lab simulator for visualising normal stress, strain, deflection, and internal moments with SVG graph export.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
