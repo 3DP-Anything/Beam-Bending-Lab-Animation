@@ -932,7 +932,10 @@ export const BeamCanvas: React.FC<BeamCanvasProps> = ({
           const endPoint = grid[numSlicesX][midLayer];
           ctx.fillStyle = isDark ? '#f8fafc' : (isRainbowActive ? '#0f172a' : textMuted);
           ctx.font = isRainbowActive ? 'bold 11px "JetBrains Mono", monospace' : '11px "JetBrains Mono", monospace';
-          ctx.fillText('Neutral Axis', endPoint.x + 8, endPoint.y + 4);
+          const textW = ctx.measureText('Neutral Axis').width;
+          const fitsRight = endPoint.x + 8 + textW < w - 12;
+          ctx.textAlign = fitsRight ? 'left' : 'right';
+          ctx.fillText('Neutral Axis', fitsRight ? (endPoint.x + 8) : (endPoint.x - 8), endPoint.y + 4);
           ctx.restore();
         }
 
@@ -2364,7 +2367,7 @@ export const BeamCanvas: React.FC<BeamCanvasProps> = ({
   const w = canvasMetrics.width;
   const originX = Math.max(225, Math.min(275, w * 0.26));
   const tensionRightReserved = Math.max(210, w * 0.26);
-  const rightMargin = isBending ? Math.max(50, w * 0.07) : tensionRightReserved;
+  const rightMargin = isBending ? Math.max(120, w * 0.12) : tensionRightReserved;
   const beamDrawLength = Math.max(160, w - originX - rightMargin);
   const beamCenterX = originX + beamDrawLength / 2;
 

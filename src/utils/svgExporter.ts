@@ -35,7 +35,7 @@ export function generateBeamSvg(
   const originX = Math.max(225, Math.min(275, width * 0.26));
 
   const tensionRightReserved = Math.max(210, width * 0.26);
-  const rightMargin = isBending ? Math.max(50, width * 0.07) : tensionRightReserved;
+  const rightMargin = isBending ? Math.max(120, width * 0.13) : tensionRightReserved;
   const beamDrawLength = Math.max(160, width - originX - rightMargin);
 
   const beamCenterY = height * 0.36;
@@ -322,11 +322,14 @@ export function generateBeamSvg(
         naD += ` L ${grid[i][midLayer].x.toFixed(2)} ${grid[i][midLayer].y.toFixed(2)}`;
       }
       const endPt = grid[numSlicesX][midLayer];
+      const fitsOnRight = endPt.x + 8 + 85 < width - 10;
+      const naTextX = fitsOnRight ? (endPt.x + 8) : (endPt.x - 8);
+      const naAnchor = fitsOnRight ? 'start' : 'end';
       elementsSvg += `
         <g>
           ${isRainbow ? `<path d="${naD}" fill="none" stroke="rgba(0,0,0,0.45)" stroke-width="3.5" stroke-dasharray="6,3" />` : ''}
           <path d="${naD}" fill="none" stroke="${isRainbow ? '#ffffff' : 'rgba(15,23,42,0.65)'}" stroke-width="${isRainbow ? '2' : '1.25'}" stroke-dasharray="${isRainbow ? '6,3' : '5,3'}" />
-          <text x="${endPt.x + 8}" y="${endPt.y + 4}" font-family="'JetBrains Mono', monospace" font-size="11" font-weight="${isRainbow ? 'bold' : 'normal'}" fill="${isRainbow ? '#0f172a' : '#64748b'}" dominant-baseline="middle">Neutral Axis</text>
+          <text x="${naTextX}" y="${endPt.y + 4}" font-family="'JetBrains Mono', monospace" font-size="11" font-weight="${isRainbow ? 'bold' : 'normal'}" fill="${isRainbow ? '#0f172a' : '#64748b'}" text-anchor="${naAnchor}" dominant-baseline="middle">Neutral Axis</text>
         </g>
       `;
     }
