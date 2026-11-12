@@ -171,7 +171,7 @@ export const BeamCanvas: React.FC<BeamCanvasProps> = ({
 
         // B. Coloured Stress / Strain Values across Cross Section
         // Center of beam if cross-section option not activated, at cross-section plane if activated
-        const numSlices = 28;
+        const numSlices = 60;
         const sliceH = csHeight / numSlices;
         const pType = config.profileType || 'solid_rectangle';
 
@@ -773,8 +773,8 @@ export const BeamCanvas: React.FC<BeamCanvasProps> = ({
         const nominalScale = maxPhysicalDeflM > 0 ? maxAllowedPixels / Math.max(0.002, maxPhysicalDeflM) : 1;
         const pixelDeflectionMultiplier = nominalScale * 0.08 * config.scaleFactor;
 
-        const numSlicesX = 120;
-        const numLayersY = 16;
+        const numSlicesX = 240;
+        const numLayersY = 36;
 
         // Kinematic shortening: Point B rolls inward to the left
         let totalShorteningPixels = 0;
@@ -864,6 +864,9 @@ export const BeamCanvas: React.FC<BeamCanvasProps> = ({
               ctx.lineTo(v01.x, v01.y);
               ctx.closePath();
               ctx.fillStyle = fillColor;
+              ctx.strokeStyle = fillColor;
+              ctx.lineWidth = 0.75;
+              ctx.stroke();
               ctx.fill();
             }
           }

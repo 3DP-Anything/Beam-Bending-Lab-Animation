@@ -113,7 +113,7 @@ export function generateBeamSvg(
     `;
 
     // Slices or neutral fill
-    const numSlices = 28;
+    const numSlices = 60;
     const sliceH = csHeight / numSlices;
     elementsSvg += `<g id="left-view-cross-section">`;
     if (config.visualizeMode !== 'geometry') {
@@ -227,8 +227,8 @@ export function generateBeamSvg(
     const nominalScale = maxPhysicalDeflM > 0 ? maxAllowedPixels / Math.max(0.002, maxPhysicalDeflM) : 1;
     const pixelDeflectionMultiplier = nominalScale * 0.08 * config.scaleFactor;
 
-    const numSlicesX = 80;
-    const numLayersY = 14;
+    const numSlicesX = 240;
+    const numLayersY = 36;
 
     let totalShorteningPixels = 0;
     const dX_slice = beamDrawLength / numSlicesX;
@@ -299,7 +299,7 @@ export function generateBeamSvg(
           const avgSigned = (v00.signedVal + v10.signedVal + v11.signedVal + v01.signedVal) / 4;
           const col = getStressColor(avgVal, fixedRefMax, config.colormap, avgSigned);
 
-          elementsSvg += `<polygon points="${v00.x.toFixed(2)},${v00.y.toFixed(2)} ${v10.x.toFixed(2)},${v10.y.toFixed(2)} ${v11.x.toFixed(2)},${v11.y.toFixed(2)} ${v01.x.toFixed(2)},${v01.y.toFixed(2)}" fill="${col}" stroke="${col}" stroke-width="0.5" />`;
+          elementsSvg += `<polygon points="${v00.x.toFixed(2)},${v00.y.toFixed(2)} ${v10.x.toFixed(2)},${v10.y.toFixed(2)} ${v11.x.toFixed(2)},${v11.y.toFixed(2)} ${v01.x.toFixed(2)},${v01.y.toFixed(2)}" fill="${col}" stroke="${col}" stroke-width="0.75" />`;
         }
       }
       elementsSvg += `</g>`;
