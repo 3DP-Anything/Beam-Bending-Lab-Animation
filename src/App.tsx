@@ -9,10 +9,19 @@ import {
   Pause,
 } from 'lucide-react';
 import { BeamConfig } from './types/beam';
-import { PRESET_MATERIALS, analyzeBeam } from './utils/beamPhysics';
+import {
+  BEAM_SHAPE_META,
+  PRESET_MATERIALS,
+  analyzeBeam,
+  getMatchedAreaShapeConfig,
+  getOrderedActiveShapes,
+} from './utils/beamPhysics';
 import { BeamCanvas } from './components/BeamCanvas';
 import { SpecimenSettingsModal } from './components/SpecimenSettingsModal';
 import { ViewSideMenu } from './components/ViewSideMenu';
+import { BeamShapeMenu } from './components/BeamShapeMenu';
+import { AnalysisModeMenu } from './components/AnalysisModeMenu';
+import { BeamGraphsPanel } from './components/BeamGraphsPanel';
 import { ExportGraphModal } from './components/ExportGraphModal';
 import { TopBar } from './components/TopBar';
 
@@ -21,12 +30,13 @@ const INITIAL_CONFIG: BeamConfig = {
   visualizeMode: 'geometry',  // Default: 'geometry'
   scaleReferenceMode: 'material_yield',
   profileType: 'solid_rectangle', // Default: solid rectangle
+  activeShapes: ['solid_rectangle'],
   lengthMm: 400,            // L = 400 mm
   widthMm: 20,              // b = 20 mm
   thicknessMm: 6,           // d = 6 mm
-  wallThicknessMm: 1.5,     // t_w = 1.5 mm
-  flangeThicknessMm: 1.5,   // t_f = 1.5 mm
-  webThicknessMm: 1.5,      // t_w = 1.5 mm
+  wallThicknessMm: 1,       // t_w = 1 mm
+  flangeThicknessMm: 1,     // t_f = 1 mm
+  webThicknessMm: 1,        // t_w = 1 mm
   loadN: 0,                 // Default 0 N (No load on opening)
   maxLoadN: 14.0,           // Default max load = 14 N
   loadStepN: 1.0,           // Default load step = 1 N
@@ -44,7 +54,10 @@ const INITIAL_CONFIG: BeamConfig = {
   showDeflection: false,
   showReactions: false,
   showLeftView: true,
+  showInertia: false,
   showCoordinateSystem: true,
+  showStressStrainGraph: false,
+  showLoadDeflectionGraph: false,
   showMomentDiagram: false,
   showShearDiagram: false,
   showCrossSectionProfile: false,
@@ -122,39 +135,131 @@ export default function App() {
     };
   }, [isPlaying, cycleSpeed]);
 
-  const analysis = analyzeBeam(config);
-  const isBending = config.testType === 'bending';
-  const isStrain = config.visualizeMode === 'strain';
+  const orderedShapes = getOrderedActiveShapes(config);
+  const primaryShape = orderedShapes[0];
+  const secondaryShapes = orderedShapes.slice(1);
+  const isMultiShape = orderedShapes.length > 1;
+  const primaryConfig: BeamConfig = getMatchedAreaShapeConfig(config, primaryShape);
+  const analysis = analyzeBeam(primaryConfig);
+  const rectRefAnalysis =
+    primaryShape === 'solid_rectangle'
+      ? analysis
+      : analyzeBeam(getMatchedAreaShapeConfig(config, 'solid_rectangle'));
+  const hasAnyGraph = !!(config.showStressStrainGraph || config.showLoadDeflectionGraph);
+  const shouldScrollMain = hasAnyGraph || isMultiShape;
+  const isGeometry = config.visualizeMode === 'geometry';
+  const hasMomentOverlay = config.testType === 'bending' && !!config.showMomentOnGraph;
+  const primaryHeightPx = hasMomentOverlay
+    ? isGeometry
+      ? 425
+      : 480
+    : isGeometry
+      ? 365
+      : 405;
+  const compactDiagramHeightClass = hasMomentOverlay
+    ? isGeometry
+      ? 'shrink-0 h-[425px]'
+      : 'shrink-0 h-[480px]'
+    : isGeometry
+      ? 'shrink-0 h-[365px]'
+      : 'shrink-0 h-[405px]';
+  const comparisonRowHeightClass = hasMomentOverlay
+    ? 'shrink-0 h-[355px]'
+    : 'shrink-0 h-[305px]';
 
   return (
     <div className="h-screen w-screen flex flex-col bg-slate-50 text-slate-900 font-sans overflow-hidden">
-      {/* Top Bar with 'Beam Bending Lab' title, Settings, and Export Graph */}
+      {/* Top Bar with 'EN1213-14 Beam Bending Lab' title, Settings, and Export Graph */}
       <TopBar
-        config={config}
-        onChange={handleConfigChange}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenExport={() => setIsExportModalOpen(true)}
       />
 
-      {/* Main Graphic Window - Only window visible below top bar, fully expanded */}
-      <main className="flex-1 w-full h-full relative overflow-hidden bg-white">
-        <BeamCanvas
-          config={config}
-          theme="white"
-          interactive={true}
-          isPlaying={isPlaying}
-          onTogglePlay={() => setIsPlaying(!isPlaying)}
-          onLoadChange={(newLoad) => handleConfigChange({ loadN: newLoad })}
-          onPlaneChange={(newPlaneX) => handleConfigChange({ crossSectionPlaneX: newPlaneX })}
-          onChange={handleConfigChange}
-        />
+      {/* Horizontal Analysis Mode & Colour Scale Menu directly below the Top Bar */}
+      <AnalysisModeMenu
+        config={primaryConfig}
+        onChange={handleConfigChange}
+      />
 
-        {/* View Options Side Menu directly within the main window */}
-        <ViewSideMenu
-          config={config}
-          analysis={analysis}
-          onChange={handleConfigChange}
-        />
+      {/* Horizontal View Options Bar directly below the Analysis Menu */}
+      <ViewSideMenu
+        config={primaryConfig}
+        analysis={analysis}
+        onChange={handleConfigChange}
+      />
+
+      {/* Horizontal Beam Shape Selection Menu directly below the View Menu */}
+      <BeamShapeMenu
+        config={config}
+        onChange={handleConfigChange}
+      />
+
+      {/* Main Graphic Window - Primary Beam + Optional Secondary Shapes + Response Graphs */}
+      <main
+        className={`flex-1 w-full bg-white flex flex-col ${
+          shouldScrollMain ? 'overflow-y-auto' : 'h-full overflow-hidden'
+        }`}
+      >
+        {/* Primary Beam (Default: Solid Rectangle) */}
+        <div
+          className={`relative w-full overflow-hidden ${
+            shouldScrollMain ? compactDiagramHeightClass : 'flex-1 h-full'
+          }`}
+        >
+          <BeamCanvas
+            config={primaryConfig}
+            theme="white"
+            interactive={true}
+            shapeBadge={
+              isMultiShape
+                ? {
+                    label: BEAM_SHAPE_META[primaryShape].label,
+                    color: BEAM_SHAPE_META[primaryShape].color,
+                  }
+                : undefined
+            }
+            referenceHeight={isMultiShape ? primaryHeightPx : undefined}
+            refMaxStressMpa={rectRefAnalysis.refNormalStressMpa}
+            refMaxStrainMicro={rectRefAnalysis.refNormalStrainMicro}
+            isPlaying={isPlaying}
+            onTogglePlay={() => setIsPlaying(!isPlaying)}
+            onLoadChange={(newLoad) => handleConfigChange({ loadN: newLoad })}
+            onPlaneChange={(newPlaneX) => handleConfigChange({ crossSectionPlaneX: newPlaneX })}
+            onChange={handleConfigChange}
+          />
+        </div>
+
+        {/* Additional Selected Beam Shapes Displayed Below Original Beam */}
+        {secondaryShapes.map((shape) => {
+          const shapeConfig: BeamConfig = getMatchedAreaShapeConfig(config, shape);
+          const meta = BEAM_SHAPE_META[shape];
+          return (
+            <div
+              key={`comparison-beam-${shape}`}
+              className={`relative w-full overflow-hidden border-t border-slate-200 ${comparisonRowHeightClass}`}
+            >
+              <BeamCanvas
+                config={shapeConfig}
+                theme="white"
+                interactive={true}
+                isComparison={true}
+                shapeBadge={{ label: meta.label, color: meta.color }}
+                referenceHeight={primaryHeightPx}
+                refMaxStressMpa={rectRefAnalysis.refNormalStressMpa}
+                refMaxStrainMicro={rectRefAnalysis.refNormalStrainMicro}
+                onPlaneChange={(newPlaneX) => handleConfigChange({ crossSectionPlaneX: newPlaneX })}
+              />
+            </div>
+          );
+        })}
+
+        {/* Stress vs Strain and/or Load vs Deflection Graphs below the diagrams */}
+        {hasAnyGraph && (
+          <BeamGraphsPanel
+            config={config}
+            analysis={analysis}
+          />
+        )}
       </main>
 
       {/* Specimen & Material Settings Modal with Integrated Lab Controls (Opened from Top Bar Settings Button) */}

@@ -38,11 +38,9 @@ interface SpecimenSettingsModalProps {
 
 const PROFILE_PRESETS: { type: BeamProfileType; label: string; desc: string }[] = [
   { type: 'solid_rectangle', label: 'Solid Rectangle', desc: 'Standard flat bar b × d' },
-  { type: 'hollow_rectangle', label: 'Hollow Box (RHS)', desc: 'Rectangular tube with wall t' },
   { type: 'i_beam', label: 'I-Beam (Flanged)', desc: 'Universal beam with flanges & web' },
   { type: 'solid_circle', label: 'Solid Round Bar', desc: 'Circular rod diameter d' },
   { type: 'hollow_circle', label: 'Circular Tube (CHS)', desc: 'Hollow cylinder with wall t' },
-  { type: 't_section', label: 'T-Section', desc: 'Structural tee flange & stem' },
 ];
 
 export const SpecimenSettingsModal: React.FC<SpecimenSettingsModalProps> = ({
@@ -64,8 +62,6 @@ export const SpecimenSettingsModal: React.FC<SpecimenSettingsModalProps> = ({
   const maxLoadInt = Math.round(config.maxLoadN);
   const currentProfile = config.profileType || 'solid_rectangle';
   const isCircular = currentProfile === 'solid_circle' || currentProfile === 'hollow_circle';
-  const hasWall = currentProfile === 'hollow_rectangle' || currentProfile === 'hollow_circle';
-  const hasFlangeWeb = currentProfile === 'i_beam' || currentProfile === 't_section';
 
   const handleStepUp = () => {
     const next = Math.min(config.maxLoadN, Math.round((config.loadN + step) * 100) / 100);
@@ -302,13 +298,21 @@ export const SpecimenSettingsModal: React.FC<SpecimenSettingsModalProps> = ({
               </span>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               {PROFILE_PRESETS.map((p) => {
                 const isSelected = currentProfile === p.type;
                 return (
                   <button
                     key={p.type}
-                    onClick={() => onChange({ profileType: p.type })}
+                    onClick={() => {
+                      const prevShapes = config.activeShapes && config.activeShapes.length > 0
+                        ? config.activeShapes
+                        : [currentProfile];
+                      const nextShapes = prevShapes.includes(p.type)
+                        ? prevShapes
+                        : [...prevShapes, p.type];
+                      onChange({ profileType: p.type, activeShapes: nextShapes });
+                    }}
                     className={`p-2.5 rounded-lg border text-left transition-all cursor-pointer flex flex-col justify-between ${
                       isSelected
                         ? 'bg-purple-600 text-white border-purple-600 shadow-2xs ring-2 ring-purple-300'
@@ -403,63 +407,62 @@ export const SpecimenSettingsModal: React.FC<SpecimenSettingsModalProps> = ({
               </div>
             </div>
 
-            {/* Profile specific parameters */}
-            {(hasWall || hasFlangeWeb) && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-200">
-                {hasWall && (
-                  <div className="p-2.5 rounded-lg bg-white border border-slate-200 space-y-1">
-                    <label className="text-[11px] font-semibold text-slate-600 block">Wall Thickness (t):</label>
-                    <div className="flex items-center gap-1">
-                      <input
-                        type="number"
-                        min="0.2"
-                        max="10"
-                        step="0.1"
-                        value={config.wallThicknessMm || 1.5}
-                        onChange={(e) => onChange({ wallThicknessMm: parseFloat(e.target.value) || 0.5 })}
-                        className="w-full p-1 text-xs font-mono font-bold rounded border border-slate-300 text-center"
-                      />
-                      <span className="text-xs font-mono text-slate-400">mm</span>
-                    </div>
-                  </div>
-                )}
-
-                {hasFlangeWeb && (
-                  <>
-                    <div className="p-2.5 rounded-lg bg-white border border-slate-200 space-y-1">
-                      <label className="text-[11px] font-semibold text-slate-600 block">Flange Thickness (tf):</label>
-                      <div className="flex items-center gap-1">
-                        <input
-                          type="number"
-                          min="0.2"
-                          max="10"
-                          step="0.1"
-                          value={config.flangeThicknessMm || 1.5}
-                          onChange={(e) => onChange({ flangeThicknessMm: parseFloat(e.target.value) || 0.5 })}
-                          className="w-full p-1 text-xs font-mono font-bold rounded border border-slate-300 text-center"
-                        />
-                        <span className="text-xs font-mono text-slate-400">mm</span>
-                      </div>
-                    </div>
-                    <div className="p-2.5 rounded-lg bg-white border border-slate-200 space-y-1">
-                      <label className="text-[11px] font-semibold text-slate-600 block">Web Thickness (tw):</label>
-                      <div className="flex items-center gap-1">
-                        <input
-                          type="number"
-                          min="0.2"
-                          max="10"
-                          step="0.1"
-                          value={config.webThicknessMm || 1.5}
-                          onChange={(e) => onChange({ webThicknessMm: parseFloat(e.target.value) || 0.5 })}
-                          className="w-full p-1 text-xs font-mono font-bold rounded border border-slate-300 text-center"
-                        />
-                        <span className="text-xs font-mono text-slate-400">mm</span>
-                      </div>
-                    </div>
-                  </>
-                )}
+            {/* Profile section thickness parameters (default 1 mm) */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-slate-200">
+              <div className="p-2.5 rounded-lg bg-white border border-slate-200 space-y-1">
+                <label className="text-[11px] font-semibold text-slate-600 block">
+                  Wall Thickness (t) · Tube:
+                </label>
+                <div className="flex items-center gap-1">
+                  <input
+                    type="number"
+                    min="0.2"
+                    max="10"
+                    step="0.1"
+                    value={config.wallThicknessMm || 1}
+                    onChange={(e) => onChange({ wallThicknessMm: Math.max(0.2, parseFloat(e.target.value) || 1) })}
+                    className="w-full p-1 text-xs font-mono font-bold rounded border border-slate-300 text-center"
+                  />
+                  <span className="text-xs font-mono text-slate-400">mm</span>
+                </div>
               </div>
-            )}
+
+              <div className="p-2.5 rounded-lg bg-white border border-slate-200 space-y-1">
+                <label className="text-[11px] font-semibold text-slate-600 block">
+                  Flange Thickness (tf) · I-Beam:
+                </label>
+                <div className="flex items-center gap-1">
+                  <input
+                    type="number"
+                    min="0.2"
+                    max="10"
+                    step="0.1"
+                    value={config.flangeThicknessMm || 1}
+                    onChange={(e) => onChange({ flangeThicknessMm: Math.max(0.2, parseFloat(e.target.value) || 1) })}
+                    className="w-full p-1 text-xs font-mono font-bold rounded border border-slate-300 text-center"
+                  />
+                  <span className="text-xs font-mono text-slate-400">mm</span>
+                </div>
+              </div>
+
+              <div className="p-2.5 rounded-lg bg-white border border-slate-200 space-y-1">
+                <label className="text-[11px] font-semibold text-slate-600 block">
+                  Web Thickness (tw) · I-Beam:
+                </label>
+                <div className="flex items-center gap-1">
+                  <input
+                    type="number"
+                    min="0.2"
+                    max="10"
+                    step="0.1"
+                    value={config.webThicknessMm || 1}
+                    onChange={(e) => onChange({ webThicknessMm: Math.max(0.2, parseFloat(e.target.value) || 1) })}
+                    className="w-full p-1 text-xs font-mono font-bold rounded border border-slate-300 text-center"
+                  />
+                  <span className="text-xs font-mono text-slate-400">mm</span>
+                </div>
+              </div>
+            </div>
 
             {/* Calculated Section Properties */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-slate-200 text-center text-xs">

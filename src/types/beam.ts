@@ -9,11 +9,9 @@ export type VisualizeMode = 'stress' | 'strain' | 'geometry';
 export type ScaleReferenceMode = 'material_yield' | 'max_load';
 export type BeamProfileType =
   | 'solid_rectangle'
-  | 'hollow_rectangle'
   | 'i_beam'
   | 'solid_circle'
-  | 'hollow_circle'
-  | 't_section';
+  | 'hollow_circle';
 
 export interface MaterialProperties {
   id: string;
@@ -30,6 +28,7 @@ export interface BeamConfig {
   visualizeMode: VisualizeMode;   // 'stress' or 'strain'
   scaleReferenceMode: ScaleReferenceMode; // 'material_yield' (adapts to material) or 'max_load'
   profileType: BeamProfileType;   // Cross-section profile geometry
+  activeShapes?: BeamProfileType[]; // Active beam shapes displayed & compared (default: ['solid_rectangle'])
   lengthMm: number;               // L: Length in mm (default: 400 mm)
   widthMm: number;                // b: Width / outer width in mm (default: 20 mm)
   thicknessMm: number;            // d: Thickness / total depth / outer diameter in mm (default: 6 mm)
@@ -53,7 +52,10 @@ export interface BeamConfig {
   showDeflection: boolean;        // Display beam deflection (delta)
   showReactions: boolean;
   showLeftView?: boolean;         // 1st angle projection Left View cross section
+  showInertia?: boolean;          // Display Second Moment of Area (I) value in m^4
   showCoordinateSystem?: boolean; // Cartesian (x, y) coordinate system triad at origin Point A
+  showStressStrainGraph?: boolean;   // Stress vs Strain graph below diagram
+  showLoadDeflectionGraph?: boolean; // Load vs Deflection graph below diagram
   showMomentDiagram: boolean;
   showShearDiagram: boolean;
   showCrossSectionProfile: boolean;

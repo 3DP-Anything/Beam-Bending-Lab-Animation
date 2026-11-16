@@ -3,6 +3,7 @@ import { Plus, Minus, Play, Pause } from 'lucide-react';
 import { BeamConfig, SlideTheme } from '../types/beam';
 import {
   analyzeBeam,
+  computeProfileProperties,
   getBendingMomentAt,
   getDeflectionAt,
   getNormalStrainAt,
@@ -10,14 +11,35 @@ import {
   getSlopeAt,
   getStressColor,
   getVonMisesStressAt,
+  solveDimensionsForAspectRatio,
 } from '../utils/beamPhysics';
 import { StressLegend } from './StressLegend';
 import { CrossSectionSlider } from './CrossSectionSlider';
+
+function computeCanvasBeamLayout(w: number, h: number, config: BeamConfig) {
+  const isBending = config.testType === 'bending';
+  const originX = Math.max(225, Math.min(275, w * 0.26));
+  const tensionRightReserved = Math.max(220, w * 0.23);
+  const rightMargin = isBending ? Math.max(110, w * 0.11) : tensionRightReserved;
+  const beamDrawLength = Math.max(160, w - originX - rightMargin);
+  const beamCenterY = Math.max(134, h * 0.35);
+  const baseThickness = Math.max(22, Math.min(50, h * 0.08));
+  const beamDrawThickness = Math.max(
+    18,
+    Math.min(64, Math.round(baseThickness * Math.sqrt(Math.max(1, config.thicknessMm) / 10)))
+  );
+  return { originX, rightMargin, beamDrawLength, beamCenterY, beamDrawThickness };
+}
 
 interface BeamCanvasProps {
   config: BeamConfig;
   theme?: SlideTheme;
   interactive?: boolean;
+  isComparison?: boolean;
+  shapeBadge?: { label: string; color: string };
+  referenceHeight?: number;
+  refMaxStressMpa?: number;
+  refMaxStrainMicro?: number;
   isPlaying?: boolean;
   onTogglePlay?: () => void;
   onLoadChange?: (newLoad: number) => void;
@@ -33,6 +55,11 @@ export const BeamCanvas: React.FC<BeamCanvasProps> = ({
   config,
   theme = 'white',
   interactive = true,
+  isComparison = false,
+  shapeBadge,
+  referenceHeight,
+  refMaxStressMpa,
+  refMaxStrainMicro,
   isPlaying = false,
   onTogglePlay,
   onLoadChange,
@@ -46,6 +73,18 @@ export const BeamCanvas: React.FC<BeamCanvasProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const loadTrackRef = useRef<HTMLDivElement>(null);
+  const ratioTrackRef = useRef<HTMLDivElement>(null);
+  const ratioBaselineRef = useRef<{
+    profileType: BeamConfig['profileType'];
+    origWidthMm: number;
+    origThicknessMm: number;
+    origRatio: number;
+    areaMm2: number;
+    wallThicknessMm: number;
+    flangeThicknessMm: number;
+    webThicknessMm: number;
+    emitted: Array<{ w: number; d: number }>;
+  } | null>(null);
 
   const isDraggingPlaneRef = useRef(false);
   const hoverPointRef = useRef<{
@@ -67,6 +106,8 @@ export const BeamCanvas: React.FC<BeamCanvasProps> = ({
   });
   const [isScrubbingLoad, setIsScrubbingLoad] = useState(false);
   const [hoverLoadRatio, setHoverLoadRatio] = useState<number | null>(null);
+  const [isScrubbingRatio, setIsScrubbingRatio] = useState(false);
+  const [hoverAspectRatio, setHoverAspectRatio] = useState<number | null>(null);
 
   const drawCanvas = useCallback(
     (canvas: HTMLCanvasElement) => {
@@ -97,26 +138,23 @@ export const BeamCanvas: React.FC<BeamCanvasProps> = ({
       // Analysis
       const analysis = analyzeBeam(config);
 
-      // Fixed scale reference adapting to material yield / self-weight under max load
-      const fixedRefMax = isStrain ? analysis.refNormalStrainMicro : analysis.refNormalStressMpa;
+      // Fixed scale reference (shared rectangular beam scale when provided)
+      const fixedRefMax = isStrain
+        ? (refMaxStrainMicro ?? analysis.refNormalStrainMicro)
+        : (refMaxStressMpa ?? analysis.refNormalStressMpa);
 
       const L_m = config.lengthMm / 1000;
       const d_m = config.thicknessMm / 1000;
 
       // Layout positioning:
-      // Load slider on far left (x=14..66), Left View cross section (x=72..142),
-      // and generous gap before Point A originX (x >= 225) so it never overlaps with (0,0) coordinates!
-      const originX = isBending
-        ? Math.max(225, Math.min(275, w * 0.26))
-        : Math.max(225, Math.min(275, w * 0.26));
-
-      // Right margin
-      const tensionRightReserved = Math.max(200, w * 0.24);
-      const rightMargin = isBending ? Math.max(50, w * 0.07) : tensionRightReserved;
-      const beamDrawLength = Math.max(160, w - originX - rightMargin);
-
-      const beamCenterY = h * 0.35;
-      const beamDrawThickness = Math.max(24, Math.min(64, h * 0.09));
+      // Ratio slider on far left (x=14..80), Left View cross section (x=84..originX),
+      // Point A originX (x >= 225), and right margin reserved for Load slider.
+      const {
+        originX,
+        beamDrawLength,
+        beamCenterY,
+        beamDrawThickness,
+      } = computeCanvasBeamLayout(w, h, config);
 
       const originY = beamCenterY;
       const fixedPointAY = originY + beamDrawThickness / 2;
@@ -130,7 +168,7 @@ export const BeamCanvas: React.FC<BeamCanvasProps> = ({
       // Positioned with a generous 80+ px gap before (0,0) coordinates!
       // -------------------------------------------------------------
       if (config.showLeftView !== false) {
-        const isSectionActive = !!(config.showCrossSectionVectors || config.showMomentOnGraph);
+        const isSectionActive = !!(config.showCrossSectionVectors || config.showMomentOnGraph || config.showStressStrainGraph || config.showLoadDeflectionGraph);
         const evalX_m = isSectionActive
           ? (config.crossSectionPlaneX / 1000)
           : ((config.lengthMm / 2) / 1000);
@@ -138,13 +176,13 @@ export const BeamCanvas: React.FC<BeamCanvasProps> = ({
           ? Math.round(config.crossSectionPlaneX)
           : Math.round(config.lengthMm / 2);
 
-        // Dedicated zone dynamically centered between load slider (x=68) and beam (originX)
-        const sliderRightX = 68;
+        // Dedicated zone dynamically centered between left-side ratio slider (x=84) and beam (originX)
+        const sliderRightX = 84;
         const beamStartX = originX;
         const csCenterX = Math.round((sliderRightX + beamStartX) / 2);
         const aspect = config.widthMm / Math.max(1, config.thicknessMm);
-        const maxCsW = Math.max(20, Math.min(48, (beamStartX - sliderRightX) * 0.4));
-        const csWidth = Math.max(20, Math.min(44, Math.min(maxCsW, Math.round(beamDrawThickness * aspect))));
+        const maxCsW = Math.max(20, Math.min(54, (beamStartX - sliderRightX) * 0.44));
+        const csWidth = Math.max(10, Math.min(maxCsW, Math.round(beamDrawThickness * aspect)));
         const csLeft = Math.round(csCenterX - csWidth / 2);
         const csTop = undefTopY;
         const csHeight = beamDrawThickness;
@@ -184,36 +222,20 @@ export const BeamCanvas: React.FC<BeamCanvasProps> = ({
           ctx.clip();
         } else if (pType === 'hollow_circle') {
           const radius = csHeight / 2;
-          const tRatio = Math.min(0.4, (config.wallThicknessMm || 1.5) / config.thicknessMm);
+          const tRatio = Math.min(0.4, (config.wallThicknessMm || 1) / config.thicknessMm);
           const inRadius = radius * (1 - tRatio * 2);
           ctx.arc(csCenterX, originY, radius, 0, Math.PI * 2);
           ctx.arc(csCenterX, originY, Math.max(1, inRadius), 0, Math.PI * 2, true);
           ctx.clip();
         } else if (pType === 'i_beam') {
-          const tfRatio = Math.min(0.3, (config.flangeThicknessMm || 1.5) / config.thicknessMm);
-          const twRatio = Math.min(0.4, (config.webThicknessMm || 1.5) / config.widthMm);
-          const tfPx = csHeight * tfRatio;
-          const twPx = csWidth * twRatio;
+          const tfRatio = Math.min(0.3, (config.flangeThicknessMm || 1) / config.thicknessMm);
+          const twRatio = Math.min(0.4, (config.webThicknessMm || 1) / config.widthMm);
+          const tfPx = Math.max(2, csHeight * tfRatio);
+          const twPx = Math.max(2, csWidth * twRatio);
           const webLeft = csCenterX - twPx / 2;
           ctx.rect(csLeft, csTop, csWidth, tfPx);
           ctx.rect(webLeft, csTop + tfPx, twPx, csHeight - 2 * tfPx);
           ctx.rect(csLeft, csBot - tfPx, csWidth, tfPx);
-          ctx.clip();
-        } else if (pType === 'hollow_rectangle') {
-          const tRatio = Math.min(0.35, (config.wallThicknessMm || 1.5) / config.thicknessMm);
-          const tPx = csHeight * tRatio;
-          ctx.rect(csLeft, csTop, csWidth, csHeight);
-          const inW = Math.max(2, csWidth - 2 * tPx);
-          const inH = Math.max(2, csHeight - 2 * tPx);
-          ctx.rect(csLeft + csWidth - tPx, csTop + tPx, -inW, inH);
-          ctx.clip();
-        } else if (pType === 't_section') {
-          const tfRatio = Math.min(0.35, (config.flangeThicknessMm || 1.5) / config.thicknessMm);
-          const twRatio = Math.min(0.4, (config.webThicknessMm || 1.5) / config.widthMm);
-          const tfPx = csHeight * tfRatio;
-          const twPx = csWidth * twRatio;
-          ctx.rect(csLeft, csTop, csWidth, tfPx);
-          ctx.rect(csCenterX - twPx / 2, csTop + tfPx, twPx, csHeight - tfPx);
           ctx.clip();
         } else {
           ctx.rect(csLeft, csTop, csWidth, csHeight);
@@ -275,17 +297,17 @@ export const BeamCanvas: React.FC<BeamCanvasProps> = ({
           ctx.stroke();
         } else if (pType === 'hollow_circle') {
           const radius = csHeight / 2;
-          const tRatio = Math.min(0.4, (config.wallThicknessMm || 1.5) / config.thicknessMm);
+          const tRatio = Math.min(0.4, (config.wallThicknessMm || 1) / config.thicknessMm);
           const inRadius = radius * (1 - tRatio * 2);
           ctx.beginPath();
           ctx.arc(csCenterX, originY, radius, 0, Math.PI * 2);
           ctx.arc(csCenterX, originY, Math.max(1, inRadius), 0, Math.PI * 2);
           ctx.stroke();
         } else if (pType === 'i_beam') {
-          const tfRatio = Math.min(0.3, (config.flangeThicknessMm || 1.5) / config.thicknessMm);
-          const twRatio = Math.min(0.4, (config.webThicknessMm || 1.5) / config.widthMm);
-          const tfPx = csHeight * tfRatio;
-          const twPx = csWidth * twRatio;
+          const tfRatio = Math.min(0.3, (config.flangeThicknessMm || 1) / config.thicknessMm);
+          const twRatio = Math.min(0.4, (config.webThicknessMm || 1) / config.widthMm);
+          const tfPx = Math.max(2, csHeight * tfRatio);
+          const twPx = Math.max(2, csWidth * twRatio);
           const wL = csCenterX - twPx / 2;
           const wR = csCenterX + twPx / 2;
           ctx.beginPath();
@@ -299,29 +321,6 @@ export const BeamCanvas: React.FC<BeamCanvasProps> = ({
           ctx.lineTo(csLeft, csBot);
           ctx.lineTo(csLeft, csBot - tfPx);
           ctx.lineTo(wL, csBot - tfPx);
-          ctx.lineTo(wL, csTop + tfPx);
-          ctx.lineTo(csLeft, csTop + tfPx);
-          ctx.closePath();
-          ctx.stroke();
-        } else if (pType === 'hollow_rectangle') {
-          ctx.strokeRect(csLeft, csTop, csWidth, csHeight);
-          const tRatio = Math.min(0.35, (config.wallThicknessMm || 1.5) / config.thicknessMm);
-          const tPx = csHeight * tRatio;
-          ctx.strokeRect(csLeft + tPx, csTop + tPx, csWidth - 2 * tPx, csHeight - 2 * tPx);
-        } else if (pType === 't_section') {
-          const tfRatio = Math.min(0.35, (config.flangeThicknessMm || 1.5) / config.thicknessMm);
-          const twRatio = Math.min(0.4, (config.webThicknessMm || 1.5) / config.widthMm);
-          const tfPx = csHeight * tfRatio;
-          const twPx = csWidth * twRatio;
-          const wL = csCenterX - twPx / 2;
-          const wR = csCenterX + twPx / 2;
-          ctx.beginPath();
-          ctx.moveTo(csLeft, csTop);
-          ctx.lineTo(csLeft + csWidth, csTop);
-          ctx.lineTo(csLeft + csWidth, csTop + tfPx);
-          ctx.lineTo(wR, csTop + tfPx);
-          ctx.lineTo(wR, csBot);
-          ctx.lineTo(wL, csBot);
           ctx.lineTo(wL, csTop + tfPx);
           ctx.lineTo(csLeft, csTop + tfPx);
           ctx.closePath();
@@ -517,6 +516,25 @@ export const BeamCanvas: React.FC<BeamCanvasProps> = ({
           ctx.restore();
         }
 
+        // H. Cross-sectional Area readout (and optional I readout) below Left View
+        const areaText = `A = ${analysis.crossSectionAreaMm2.toFixed(1)} mm²`;
+        const areaY = config.showDimensionLines ? csBot + 50 : csBot + 18;
+        ctx.save();
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.font = '600 9px "JetBrains Mono", monospace';
+        ctx.fillStyle = textPrimary;
+        ctx.fillText(areaText, csCenterX, areaY);
+
+        if (config.showInertia) {
+          const iM4Val = analysis.secondMomentOfAreaM4 ?? analysis.secondMomentOfAreaMm4 * 1e-12;
+          const inertiaText = `I = ${iM4Val.toExponential(3)} m⁴`;
+          const inertiaY = (!isBending && !config.showDimensionLines) ? csBot + 48 : areaY + 13;
+          ctx.fillStyle = isDark ? '#c4b5fd' : '#6d28d9';
+          ctx.fillText(inertiaText, csCenterX, inertiaY);
+        }
+        ctx.restore();
+
         ctx.restore();
       }
 
@@ -543,7 +561,10 @@ export const BeamCanvas: React.FC<BeamCanvasProps> = ({
       const testName = isBending ? '3-Point Bending Test' : 'Uniaxial Tension Test';
       const modeStr = config.visualizeMode === 'geometry' ? 'Geometry' : (isStrain ? 'Strain (ε)' : 'Stress (σ)');
       const matName = config.material.name.split(' (')[0];
-      const dimsStr = `${config.lengthMm} × ${config.widthMm} × ${config.thicknessMm} mm`;
+      const isCircShape = config.profileType === 'solid_circle' || config.profileType === 'hollow_circle';
+      const dimsStr = isCircShape
+        ? `${config.lengthMm} mm × Ø${parseFloat(config.thicknessMm.toFixed(2))} mm${config.profileType === 'hollow_circle' ? ` (t=${parseFloat((config.wallThicknessMm || 1).toFixed(2))}mm)` : ''}`
+        : `${config.lengthMm} × ${parseFloat(config.widthMm.toFixed(1))} × ${parseFloat(config.thicknessMm.toFixed(1))} mm`;
 
       const titleX = 14;
       const titleY = 12;
@@ -565,8 +586,27 @@ export const BeamCanvas: React.FC<BeamCanvasProps> = ({
       // Material, dimensions, and active mode
       ctx.font = '500 11px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
       ctx.fillStyle = isDark ? '#94a3b8' : '#64748b';
-      const detailsStr = `${matName} (${dimsStr}) · ${modeStr}`;
+      const iM4 = analysis.secondMomentOfAreaM4 ?? analysis.secondMomentOfAreaMm4 * 1e-12;
+      const inertiaHeaderPart = config.showInertia ? ` · I=${iM4.toExponential(3)}m⁴` : '';
+      const detailsStr = `${matName} (${dimsStr}) · ${modeStr}${!shapeBadge && config.showLeftView === false ? inertiaHeaderPart : ''}`;
       ctx.fillText(detailsStr, titleX + testNameW + 14, titleY);
+
+      if (shapeBadge) {
+        const badgeStartX = titleX + testNameW + 14 + ctx.measureText(detailsStr).width + 12;
+        ctx.fillStyle = shapeBadge.color;
+        ctx.fillRect(badgeStartX, titleY + 2, 9, 9);
+        ctx.font = 'bold 11px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+        ctx.fillStyle = isDark ? '#f8fafc' : '#0f172a';
+        const inertiaSegment = config.showInertia ? `  I=${iM4.toExponential(3)}m⁴` : '';
+        const metricsSuffix = isBending
+          ? `  ·  A=${analysis.crossSectionAreaMm2.toFixed(1)}mm²${inertiaSegment}  σmax=${analysis.maxNormalStressMpa.toFixed(2)}MPa  δmax=${analysis.maxDeflectionMm.toFixed(3)}mm`
+          : `  ·  A=${analysis.crossSectionAreaMm2.toFixed(1)}mm²${inertiaSegment}  σ=${analysis.axialStressMpa.toFixed(2)}MPa  ΔL=${analysis.axialElongationMm.toFixed(4)}mm`;
+        ctx.fillText(shapeBadge.label, badgeStartX + 14, titleY);
+        const lblW = ctx.measureText(shapeBadge.label).width;
+        ctx.font = '500 10.5px "JetBrains Mono", monospace';
+        ctx.fillStyle = isDark ? '#94a3b8' : '#64748b';
+        ctx.fillText(metricsSuffix, badgeStartX + 14 + lblW, titleY + 0.5);
+      }
       ctx.restore();
 
       // -------------------------------------------------------------
@@ -769,7 +809,7 @@ export const BeamCanvas: React.FC<BeamCanvasProps> = ({
       // =============================================================
       if (isBending) {
         const maxPhysicalDeflM = Math.abs(analysis.maxDeflectionMm) / 1000;
-        const maxAllowedPixels = h * 0.22;
+        const maxAllowedPixels = (referenceHeight ?? h) * 0.22;
         const nominalScale = maxPhysicalDeflM > 0 ? maxAllowedPixels / Math.max(0.002, maxPhysicalDeflM) : 1;
         const pixelDeflectionMultiplier = nominalScale * 0.08 * config.scaleFactor;
 
@@ -1460,7 +1500,7 @@ export const BeamCanvas: React.FC<BeamCanvasProps> = ({
         }
 
         // 9. Movable Cross-Section Plane & Stress/Strain Vectors
-        const showPlaneLine = config.showCrossSectionVectors || config.showMomentOnGraph;
+        const showPlaneLine = config.showCrossSectionVectors || config.showMomentOnGraph || config.showStressStrainGraph || config.showLoadDeflectionGraph;
         if (showPlaneLine) {
           ctx.save();
           const planeXMm = Math.max(0, Math.min(config.lengthMm, config.crossSectionPlaneX));
@@ -1703,8 +1743,8 @@ export const BeamCanvas: React.FC<BeamCanvasProps> = ({
           ctx.font = 'bold 12px "JetBrains Mono", monospace';
           const labelW = ctx.measureText(loadLabel).width + 16;
           
-          // Ensure badge stays safely inside the canvas frame under any screen width
-          const badgeX = Math.min(w - labelW - 16, arrowEndX + 6);
+          // Ensure badge stays safely left of the right-side Ratio slider
+          const badgeX = Math.min(w - labelW - 96, arrowEndX + 6);
 
           ctx.fillStyle = '#dc2626';
           ctx.beginPath();
@@ -1863,7 +1903,7 @@ export const BeamCanvas: React.FC<BeamCanvasProps> = ({
         }
 
         // 4. MOVABLE CROSS-SECTION PLANE IN TENSION
-        if (config.showCrossSectionVectors) {
+        if (config.showCrossSectionVectors || config.showStressStrainGraph || config.showLoadDeflectionGraph) {
           ctx.save();
           const planeRatio = config.crossSectionPlaneX / config.lengthMm;
           const planePixelX = originX + planeRatio * currentSpecimenLen;
@@ -1890,69 +1930,71 @@ export const BeamCanvas: React.FC<BeamCanvasProps> = ({
           ctx.textAlign = 'center';
           ctx.fillText(`x = ${config.crossSectionPlaneX.toFixed(0)} mm`, planePixelX, specTopY - 22);
 
-          const numVectorSamples = 7;
-          const maxVectorPixelLen = Math.min(100, Math.max(15, (val / fixedRefMax) * 80 * (config.vectorScale || 1.5)));
+          if (config.showCrossSectionVectors) {
+            const numVectorSamples = 7;
+            const maxVectorPixelLen = Math.min(100, Math.max(15, (val / fixedRefMax) * 80 * (config.vectorScale || 1.5)));
 
-          for (let s = 0; s < numVectorSamples; s++) {
-            const vs = (s + 0.5) / numVectorSamples;
-            const ptY = specTopY + vs * currentThickness;
-            const arrowEndX = planePixelX + maxVectorPixelLen;
+            for (let s = 0; s < numVectorSamples; s++) {
+              const vs = (s + 0.5) / numVectorSamples;
+              const ptY = specTopY + vs * currentThickness;
+              const arrowEndX = planePixelX + maxVectorPixelLen;
 
-            if (maxVectorPixelLen > 3) {
-              ctx.beginPath();
-              ctx.moveTo(planePixelX, ptY);
-              ctx.lineTo(arrowEndX, ptY);
-              ctx.strokeStyle = '#dc2626';
-              ctx.lineWidth = 2.5;
-              ctx.stroke();
+              if (maxVectorPixelLen > 3) {
+                ctx.beginPath();
+                ctx.moveTo(planePixelX, ptY);
+                ctx.lineTo(arrowEndX, ptY);
+                ctx.strokeStyle = '#dc2626';
+                ctx.lineWidth = 2.5;
+                ctx.stroke();
 
-              ctx.beginPath();
-              ctx.moveTo(arrowEndX, ptY);
-              ctx.lineTo(arrowEndX - 7, ptY - 4);
-              ctx.lineTo(arrowEndX - 7, ptY + 4);
-              ctx.closePath();
-              ctx.fillStyle = '#dc2626';
-              ctx.fill();
+                ctx.beginPath();
+                ctx.moveTo(arrowEndX, ptY);
+                ctx.lineTo(arrowEndX - 7, ptY - 4);
+                ctx.lineTo(arrowEndX - 7, ptY + 4);
+                ctx.closePath();
+                ctx.fillStyle = '#dc2626';
+                ctx.fill();
+              }
             }
+
+            // In tension test: Display stress and strain ABOVE and BELOW the specimen (not on the colored body)
+            const tensStressText = `σ = ${analysis.axialStressMpa.toFixed(2)} MPa`;
+            const tensStrainText = `ε = ${analysis.axialStrainMicro < 10 ? analysis.axialStrainMicro.toFixed(2) : analysis.axialStrainMicro.toFixed(1)} με`;
+
+            ctx.font = '600 11px "JetBrains Mono", monospace';
+            const stressW = ctx.measureText(tensStressText).width + 12;
+            const strainW = ctx.measureText(tensStrainText).width + 12;
+
+            // Above the specimen (strictly above specTopY)
+            const tensionTopLabelY = specTopY - 14;
+            ctx.save();
+            ctx.fillStyle = isDark ? 'rgba(15, 23, 42, 0.92)' : 'rgba(255, 255, 255, 0.95)';
+            ctx.beginPath();
+            ctx.roundRect(planePixelX - stressW / 2, tensionTopLabelY - 10, stressW, 18, 4);
+            ctx.fill();
+            ctx.strokeStyle = '#dc2626';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+            ctx.fillStyle = '#dc2626';
+            ctx.textAlign = 'center';
+            ctx.fillText(tensStressText, planePixelX, tensionTopLabelY + 3);
+            ctx.restore();
+
+            // Below the specimen (strictly below specBotY)
+            const tensionBotLabelY = specBotY + 16;
+            ctx.save();
+            ctx.fillStyle = isDark ? 'rgba(15, 23, 42, 0.92)' : 'rgba(255, 255, 255, 0.95)';
+            ctx.beginPath();
+            ctx.roundRect(planePixelX - strainW / 2, tensionBotLabelY - 10, strainW, 18, 4);
+            ctx.fill();
+            ctx.strokeStyle = '#64748b';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+            ctx.fillStyle = '#64748b';
+            ctx.textAlign = 'center';
+            ctx.fillText(tensStrainText, planePixelX, tensionBotLabelY + 3);
+            ctx.restore();
           }
-
-          // In tension test: Display stress and strain ABOVE and BELOW the specimen (not on the colored body)
-          const tensStressText = `σ = ${analysis.axialStressMpa.toFixed(2)} MPa`;
-          const tensStrainText = `ε = ${analysis.axialStrainMicro < 10 ? analysis.axialStrainMicro.toFixed(2) : analysis.axialStrainMicro.toFixed(1)} με`;
-
-          ctx.font = '600 11px "JetBrains Mono", monospace';
-          const stressW = ctx.measureText(tensStressText).width + 12;
-          const strainW = ctx.measureText(tensStrainText).width + 12;
-
-          // Above the specimen (strictly above specTopY)
-          const tensionTopLabelY = specTopY - 14;
-          ctx.save();
-          ctx.fillStyle = isDark ? 'rgba(15, 23, 42, 0.92)' : 'rgba(255, 255, 255, 0.95)';
-          ctx.beginPath();
-          ctx.roundRect(planePixelX - stressW / 2, tensionTopLabelY - 10, stressW, 18, 4);
-          ctx.fill();
-          ctx.strokeStyle = '#dc2626';
-          ctx.lineWidth = 1;
-          ctx.stroke();
-          ctx.fillStyle = '#dc2626';
-          ctx.textAlign = 'center';
-          ctx.fillText(tensStressText, planePixelX, tensionTopLabelY + 3);
-          ctx.restore();
-
-          // Below the specimen (strictly below specBotY)
-          const tensionBotLabelY = specBotY + 16;
-          ctx.save();
-          ctx.fillStyle = isDark ? 'rgba(15, 23, 42, 0.92)' : 'rgba(255, 255, 255, 0.95)';
-          ctx.beginPath();
-          ctx.roundRect(planePixelX - strainW / 2, tensionBotLabelY - 10, strainW, 18, 4);
-          ctx.fill();
-          ctx.strokeStyle = '#64748b';
-          ctx.lineWidth = 1;
-          ctx.stroke();
-          ctx.fillStyle = '#64748b';
-          ctx.textAlign = 'center';
-          ctx.fillText(tensStrainText, planePixelX, tensionBotLabelY + 3);
-          ctx.restore();
 
           ctx.restore();
         }
@@ -2128,7 +2170,7 @@ export const BeamCanvas: React.FC<BeamCanvasProps> = ({
         ctx.restore();
       }
     },
-    [config, theme]
+    [config, theme, refMaxStressMpa, refMaxStrainMicro]
   );
 
   const updateCanvasSize = useCallback(() => {
@@ -2185,10 +2227,7 @@ export const BeamCanvas: React.FC<BeamCanvasProps> = ({
     const clientX = e.clientX - rect.left;
 
     const isBending = config.testType === 'bending';
-    const originX = Math.max(225, Math.min(275, rect.width * 0.26));
-    const tensionRightReserved = Math.max(200, rect.width * 0.24);
-    const rightMargin = isBending ? Math.max(50, rect.width * 0.07) : tensionRightReserved;
-    const beamLengthPx = Math.max(160, rect.width - originX - rightMargin);
+    const { originX, beamDrawLength: beamLengthPx } = computeCanvasBeamLayout(rect.width, rect.height, config);
 
     const planeRatio = config.crossSectionPlaneX / config.lengthMm;
     const planePixelX = originX + planeRatio * beamLengthPx;
@@ -2208,10 +2247,12 @@ export const BeamCanvas: React.FC<BeamCanvasProps> = ({
     const clientY = e.clientY - rect.top;
 
     const isBending = config.testType === 'bending';
-    const originX = Math.max(225, Math.min(275, rect.width * 0.26));
-    const tensionRightReserved = Math.max(200, rect.width * 0.24);
-    const rightMargin = isBending ? Math.max(50, rect.width * 0.07) : tensionRightReserved;
-    const beamLengthPx = Math.max(160, rect.width - originX - rightMargin);
+    const {
+      originX,
+      beamDrawLength: beamLengthPx,
+      beamCenterY: originY,
+      beamDrawThickness,
+    } = computeCanvasBeamLayout(rect.width, rect.height, config);
 
     if (isDraggingPlaneRef.current && onPlaneChange) {
       const u = Math.max(0, Math.min(1, (clientX - originX) / beamLengthPx));
@@ -2226,8 +2267,6 @@ export const BeamCanvas: React.FC<BeamCanvasProps> = ({
 
     if (u >= 0 && u <= 1) {
       const realX_m = u * (config.lengthMm / 1000);
-      const originY = rect.height * 0.35;
-      const beamDrawThickness = Math.max(24, Math.min(64, rect.height * 0.09));
 
       let beamCenterAtX = originY;
       let realDeltaM = 0;
@@ -2359,45 +2398,221 @@ export const BeamCanvas: React.FC<BeamCanvasProps> = ({
     onLoadChange(parseFloat(nextVal.toFixed(step < 1 ? 2 : 0)));
   };
 
-  // Metrics for positioning YouTube player controls
+  // Cross-Section Ratio Slider Handlers (1 to 3, constant area, smooth morph from (b0, d0) at 1 to (d0, b0) at 3)
+  const isCircularProfile =
+    config.profileType === 'solid_circle' || config.profileType === 'hollow_circle';
+  const currentAspectRatio = config.thicknessMm / Math.max(0.1, config.widthMm);
+
+  const getRatioBaseline = () => {
+    const baseline = ratioBaselineRef.current;
+    const curWall = config.wallThicknessMm || 1;
+    const curFlange = config.flangeThicknessMm || 1;
+    const curWeb = config.webThicknessMm || 1;
+
+    const matchesKnown =
+      baseline &&
+      baseline.profileType === config.profileType &&
+      baseline.wallThicknessMm === curWall &&
+      baseline.flangeThicknessMm === curFlange &&
+      baseline.webThicknessMm === curWeb &&
+      ((Math.abs(baseline.origWidthMm - config.widthMm) < 1e-4 &&
+        Math.abs(baseline.origThicknessMm - config.thicknessMm) < 1e-4) ||
+        baseline.emitted.some(
+          (p) =>
+            Math.abs(p.w - config.widthMm) < 1e-4 &&
+            Math.abs(p.d - config.thicknessMm) < 1e-4
+        ));
+
+    if (matchesKnown && baseline) {
+      return baseline;
+    }
+
+    const currentProps = computeProfileProperties(config);
+    const fresh = {
+      profileType: config.profileType,
+      origWidthMm: config.widthMm,
+      origThicknessMm: config.thicknessMm,
+      origRatio: config.thicknessMm / Math.max(0.1, config.widthMm),
+      areaMm2: currentProps.areaMm2,
+      wallThicknessMm: curWall,
+      flangeThicknessMm: curFlange,
+      webThicknessMm: curWeb,
+      emitted: [{ w: config.widthMm, d: config.thicknessMm }],
+    };
+    ratioBaselineRef.current = fresh;
+    return fresh;
+  };
+
+  const activeBaseline = getRatioBaseline();
+  const isNonSquareBaseline = Math.abs(activeBaseline.origWidthMm - activeBaseline.origThicknessMm) > 0.05;
+
+  // Map current (b, d) back to slider value in [1, 3]
+  const computeCurrentSliderVal = (): number => {
+    if (!isNonSquareBaseline) {
+      return Math.max(1, Math.min(3, currentAspectRatio));
+    }
+    const r0 = activeBaseline.origRatio;
+    const denom = -2 * Math.log(r0);
+    if (Math.abs(denom) < 1e-6) return 1;
+    const u = Math.max(0, Math.min(1, Math.log(currentAspectRatio / r0) / denom));
+    return 1 + 2 * u;
+  };
+
+  const currentSliderVal = computeCurrentSliderVal();
+
+  const computeDimensionsForSlider = (
+    sliderRaw: number,
+    baseline: ReturnType<typeof getRatioBaseline>
+  ): { slider: number; widthMm: number; thicknessMm: number } => {
+    const clampedSlider = Math.max(1, Math.min(3, Math.round(sliderRaw * 100) / 100));
+    const uRaw = (clampedSlider - 1) / 2; // 0 at slider=1, 1 at slider=3
+
+    // Snap cleanly to original dimensions at the bottom position (u <= 0.02)
+    if (uRaw <= 0.02) {
+      return {
+        slider: 1,
+        widthMm: baseline.origWidthMm,
+        thicknessMm: baseline.origThicknessMm,
+      };
+    }
+
+    const u = uRaw >= 0.98 ? 1 : uRaw;
+    const nonSquare = Math.abs(baseline.origWidthMm - baseline.origThicknessMm) > 0.05;
+
+    // At the top position (u = 1), transform solid rectangle (b0, d0) -> (d0, b0)
+    if (nonSquare && u >= 1 - 1e-4 && (config.profileType || 'solid_rectangle') === 'solid_rectangle') {
+      return {
+        slider: 3,
+        widthMm: baseline.origThicknessMm,
+        thicknessMm: baseline.origWidthMm,
+      };
+    }
+
+    const targetAspectRatio = nonSquare
+      ? Math.pow(baseline.origRatio, 1 - 2 * u)
+      : 1 + 2 * u;
+
+    const { widthMm, thicknessMm } = solveDimensionsForAspectRatio(
+      config,
+      targetAspectRatio,
+      baseline.areaMm2
+    );
+    return { slider: 1 + 2 * u, widthMm, thicknessMm };
+  };
+
+  const applySliderRatio = (nextSliderRaw: number) => {
+    if (!onChange || isCircularProfile) return;
+    const baseline = getRatioBaseline();
+    const { widthMm, thicknessMm } = computeDimensionsForSlider(nextSliderRaw, baseline);
+    const alreadyRecorded = baseline.emitted.some(
+      (p) => Math.abs(p.w - widthMm) < 1e-4 && Math.abs(p.d - thicknessMm) < 1e-4
+    );
+    if (!alreadyRecorded) {
+      baseline.emitted = [...baseline.emitted.slice(-63), { w: widthMm, d: thicknessMm }];
+    }
+    ratioBaselineRef.current = baseline;
+    onChange({ widthMm, thicknessMm });
+  };
+
+  const handleRatioPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!interactive || !onChange || isCircularProfile || !ratioTrackRef.current) return;
+    setIsScrubbingRatio(true);
+    e.currentTarget.setPointerCapture(e.pointerId);
+
+    const rect = ratioTrackRef.current.getBoundingClientRect();
+    const u = Math.max(0, Math.min(1, (rect.bottom - e.clientY) / rect.height));
+    applySliderRatio(1 + u * 2);
+  };
+
+  const handleRatioPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!ratioTrackRef.current) return;
+    const rect = ratioTrackRef.current.getBoundingClientRect();
+    const u = Math.max(0, Math.min(1, (rect.bottom - e.clientY) / rect.height));
+    const hoveredS = Math.round((1 + u * 2) * 100) / 100;
+    setHoverAspectRatio(hoveredS);
+
+    if (isScrubbingRatio && onChange && !isCircularProfile) {
+      applySliderRatio(1 + u * 2);
+    }
+  };
+
+  const handleRatioPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (isScrubbingRatio && ratioTrackRef.current && onChange && !isCircularProfile) {
+      const rect = ratioTrackRef.current.getBoundingClientRect();
+      const u = Math.max(0, Math.min(1, (rect.bottom - e.clientY) / rect.height));
+      applySliderRatio(1 + u * 2);
+    }
+    setIsScrubbingRatio(false);
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
+  };
+
+  const stepUpRatio = () => {
+    applySliderRatio(currentSliderVal + 0.1);
+  };
+
+  const stepDownRatio = () => {
+    applySliderRatio(currentSliderVal - 0.1);
+  };
+
+  const hoveredPreviewDims =
+    !isScrubbingRatio && hoverAspectRatio !== null && !isCircularProfile
+      ? computeDimensionsForSlider(hoverAspectRatio, activeBaseline)
+      : null;
+  const topTargetDims = !isCircularProfile
+    ? computeDimensionsForSlider(3, activeBaseline)
+    : { slider: 3, widthMm: config.widthMm, thicknessMm: config.thicknessMm };
+  const tooltipWidthMm = hoveredPreviewDims ? hoveredPreviewDims.widthMm : config.widthMm;
+  const tooltipThicknessMm = hoveredPreviewDims ? hoveredPreviewDims.thicknessMm : config.thicknessMm;
+  const tooltipRatio = tooltipThicknessMm / Math.max(0.1, tooltipWidthMm);
+  const formatDim = (v: number) => `${parseFloat(v.toFixed(1))}`;
+
   // Metrics for positioning player controls
   const isBending = config.testType === 'bending';
   const analysis = analyzeBeam(config);
-  const beamCenterY = canvasMetrics.height * 0.35;
-  const beamDrawThickness = Math.max(24, Math.min(64, canvasMetrics.height * 0.09));
-  const fixedPointAY = beamCenterY + beamDrawThickness / 2;
-
   const w = canvasMetrics.width;
-  const originX = Math.max(225, Math.min(275, w * 0.26));
-  const tensionRightReserved = Math.max(210, w * 0.26);
-  const rightMargin = isBending ? Math.max(120, w * 0.12) : tensionRightReserved;
-  const beamDrawLength = Math.max(160, w - originX - rightMargin);
+  const {
+    originX,
+    beamDrawLength,
+    beamCenterY,
+    beamDrawThickness,
+  } = computeCanvasBeamLayout(w, canvasMetrics.height, config);
+  const fixedPointAY = beamCenterY + beamDrawThickness / 2;
   const beamCenterX = originX + beamDrawLength / 2;
 
   const isGeometryMode = config.visualizeMode === 'geometry';
-  const showCrossSectionSlider = (config.showCrossSectionVectors || config.showMomentOnGraph) && !!onChange;
+  const showCrossSectionSlider = (config.showCrossSectionVectors || config.showMomentOnGraph || config.showStressStrainGraph || config.showLoadDeflectionGraph) && !!onChange;
+  const ratioPct = Math.max(0, Math.min(100, ((currentSliderVal - 1) / 2) * 100));
 
-  // Calculate bottom reach of bending moment curve and Mmax label
+  // Calculate actual midspan deflection pixels matching drawCanvas & bottom reach of moment/cross-section badges
   const hasMoment = isBending && analysis.maxBendingMomentNm > 0.0001;
   const refM = Math.max(0.01, analysis.refBendingMomentNm || (config.maxLoadN * (config.lengthMm / 1000)) / 4);
   const maxMomentScalePx = hasMoment ? Math.min(80, (analysis.maxBendingMomentNm / refM) * 65) : 0;
-  const midDeflectionPx = isBending ? Math.min(45, (analysis.maxDeflectionMm / Math.max(0.001, config.thicknessMm)) * 25) : 0;
+  const maxPhysicalDeflM = isBending ? Math.abs(analysis.maxDeflectionMm) / 1000 : 0;
+  const maxAllowedDeflPixels = canvasMetrics.height * 0.22;
+  const nominalDeflScale = maxPhysicalDeflM > 0 ? maxAllowedDeflPixels / Math.max(0.002, maxPhysicalDeflM) : 1;
+  const midDeflectionPx = isBending ? maxPhysicalDeflM * nominalDeflScale * 0.08 * config.scaleFactor : 0;
+  const sectionBadgePad = isBending && config.showCrossSectionVectors ? 26 : 0;
   const momentPeakEstY = fixedPointAY + midDeflectionPx + maxMomentScalePx;
-  const momentBottomLimit = hasMoment ? (momentPeakEstY + 36) : (fixedPointAY + 30);
+  const momentBottomLimit = hasMoment ? (momentPeakEstY + 36) : (fixedPointAY + midDeflectionPx + 30);
 
-  // Position color scale with generous clearance below Mmax text and bending moment curve
-  const scaleTop = isBending && config.showMomentOnGraph
+  // Position color scale with generous clearance below deflected beam, Tens badge, and moment curve
+  const maxLiveScaleTop = Math.max(fixedPointAY + 56, canvasMetrics.height - (showCrossSectionSlider ? 128 : 64));
+  const desiredScaleTop = isBending && config.showMomentOnGraph
     ? Math.max(fixedPointAY + 152, momentBottomLimit + 36)
-    : (fixedPointAY + 56);
+    : Math.max(fixedPointAY + 56, fixedPointAY + midDeflectionPx + sectionBadgePad + 28);
+  const scaleTop = Math.min(maxLiveScaleTop, desiredScaleTop);
 
   // Cross section scale positioned with generous clearance below colored scale (or below moment curve in geometry mode)
   const sliderTop = isGeometryMode
-    ? (isBending && config.showMomentOnGraph ? Math.max(fixedPointAY + 145, momentBottomLimit + 26) : (fixedPointAY + 54))
+    ? (isBending && config.showMomentOnGraph ? Math.max(fixedPointAY + 145, momentBottomLimit + 26) : Math.max(fixedPointAY + 54, fixedPointAY + midDeflectionPx + sectionBadgePad + 24))
     : (scaleTop + 76);
 
-  // Vertical Load Slider positioned to the far left hand side of the graph area
-  const loadSliderLeft = 14;
-  const loadSliderTop = Math.max(w < 720 ? 86 : 68, fixedPointAY - 95);
+  // Vertical Load & Ratio sliders top offset
+  const sliderTopY = Math.max(w < 720 ? 86 : 68, fixedPointAY - 95);
 
   const loadPct = Math.max(0, Math.min(100, (config.loadN / Math.max(0.1, config.maxLoadN)) * 100));
 
@@ -2421,19 +2636,117 @@ export const BeamCanvas: React.FC<BeamCanvasProps> = ({
         className="w-full h-full block cursor-default touch-none"
       />
 
-      {/* 1. YouTube Vertical Load Slider (directly in the graph window, no box over the graph) */}
-      {interactive && onLoadChange && (
+      {/* 1A. Vertical Cross-Section Aspect Ratio Slider (d/b, constant area) on left side of beam */}
+      {!isComparison && interactive && onChange && (
+        <div
+          className={`absolute z-20 flex flex-col items-center select-none pointer-events-auto ${
+            isCircularProfile ? 'opacity-45' : ''
+          }`}
+          style={{
+            left: '14px',
+            top: `${sliderTopY}px`,
+            width: '66px',
+          }}
+          title={
+            isCircularProfile
+              ? 'Aspect ratio locked to 1:1 for circular cross-sections'
+              : `Adjust height-to-width ratio d/b keeping area constant at ${analysis.crossSectionAreaMm2.toFixed(1)} mm²`
+          }
+        >
+          {/* Header */}
+          <div className="flex flex-col items-center mb-1">
+            <span className="text-[10px] font-bold text-slate-700 tracking-wide whitespace-nowrap">
+              Ratio (d/b)
+            </span>
+            <span className="font-mono text-[9px] text-slate-500 font-semibold whitespace-nowrap">
+              {formatDim(topTargetDims.widthMm)}×{formatDim(topTargetDims.thicknessMm)}
+            </span>
+          </div>
+
+          {/* Step Up Button (+) */}
+          <button
+            onClick={stepUpRatio}
+            disabled={isCircularProfile}
+            title="Move cross-section toward swapped top ratio"
+            className="w-6 h-5 mb-1 rounded hover:bg-slate-200/70 text-slate-600 hover:text-indigo-600 disabled:pointer-events-none font-bold text-xs flex items-center justify-center transition-colors cursor-pointer"
+          >
+            <Plus className="w-3 h-3" />
+          </button>
+
+          {/* Vertical Track */}
+          <div
+            ref={ratioTrackRef}
+            onPointerDown={handleRatioPointerDown}
+            onPointerMove={handleRatioPointerMove}
+            onPointerUp={handleRatioPointerUp}
+            onPointerLeave={() => setHoverAspectRatio(null)}
+            className={`relative w-6 h-[95px] flex items-center justify-center group touch-none ${
+              isCircularProfile ? 'cursor-not-allowed' : 'cursor-pointer'
+            }`}
+          >
+            {/* Track rail */}
+            <div className="w-1.5 group-hover:w-2.5 transition-all duration-150 h-full bg-slate-300 rounded-full relative overflow-hidden shadow-inner">
+              {/* Indigo Progress Fill from bottom to top */}
+              <div
+                className="absolute bottom-0 left-0 right-0 bg-indigo-600 rounded-full transition-all duration-75"
+                style={{ height: `${ratioPct}%` }}
+              />
+            </div>
+
+            {/* Circular Scrubber Thumb */}
+            <div
+              className="absolute left-1/2 -translate-x-1/2 w-3.5 h-3.5 rounded-full bg-indigo-600 border-2 border-white shadow-md shadow-indigo-500/40 pointer-events-none group-hover:scale-125 transition-all duration-75"
+              style={{ bottom: `calc(${ratioPct}% - 7px)` }}
+            />
+
+            {/* Floating Tooltip Badge to the right of thumb */}
+            <div
+              className={`absolute left-7 -translate-y-1/2 bg-slate-900 text-white font-mono text-[10px] font-bold px-2 py-0.5 rounded shadow-lg whitespace-nowrap pointer-events-none z-30 transition-opacity duration-150 ${
+                isScrubbingRatio || hoverAspectRatio !== null ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+              }`}
+              style={{ bottom: `calc(${ratioPct}% - 7px)` }}
+            >
+              {formatDim(tooltipWidthMm)}×{formatDim(tooltipThicknessMm)} mm · d/b = {tooltipRatio.toFixed(2)} · A = {analysis.crossSectionAreaMm2.toFixed(0)} mm²
+            </div>
+          </div>
+
+          {/* Step Down Button (-) */}
+          <button
+            onClick={stepDownRatio}
+            disabled={isCircularProfile}
+            title="Move cross-section toward original bottom ratio"
+            className="w-6 h-5 mt-1 rounded hover:bg-slate-200/70 text-slate-600 hover:text-indigo-600 disabled:pointer-events-none font-bold text-xs flex items-center justify-center transition-colors cursor-pointer"
+          >
+            <Minus className="w-3 h-3" />
+          </button>
+
+          <span className="font-mono text-[9px] text-slate-500 mt-0.5 font-semibold whitespace-nowrap">
+            {formatDim(activeBaseline.origWidthMm)}×{formatDim(activeBaseline.origThicknessMm)}
+          </span>
+
+          {/* Compact live ratio & dimensions readout */}
+          <span className="font-mono text-[9px] text-indigo-700 font-bold mt-1 whitespace-nowrap">
+            {formatDim(config.widthMm)}×{formatDim(config.thicknessMm)} mm
+          </span>
+          <span className="font-mono text-[8.5px] text-slate-500 whitespace-nowrap">
+            d/b={currentAspectRatio.toFixed(2)}
+          </span>
+        </div>
+      )}
+
+      {/* 1B. YouTube Vertical Load Slider on right side of beam */}
+      {!isComparison && interactive && onLoadChange && (
         <div
           className="absolute z-20 flex flex-col items-center select-none pointer-events-auto"
           style={{
-            left: `${loadSliderLeft}px`,
-            top: `${loadSliderTop}px`,
-            width: '52px',
+            right: '14px',
+            top: `${sliderTopY}px`,
+            width: '56px',
           }}
         >
           {/* Header */}
           <div className="flex flex-col items-center mb-1">
-            <span className="text-[10px] font-bold text-slate-700 tracking-wide">Load (W)</span>
+            <span className="text-[10px] font-bold text-slate-700 tracking-wide whitespace-nowrap">Load (W)</span>
             <span className="font-mono text-[9px] text-slate-400 font-semibold">{Math.round(config.maxLoadN)}N</span>
           </div>
 
@@ -2471,9 +2784,9 @@ export const BeamCanvas: React.FC<BeamCanvasProps> = ({
               style={{ bottom: `calc(${loadPct}% - 7px)` }}
             />
 
-            {/* Floating Tooltip Badge next to thumb */}
+            {/* Floating Tooltip Badge to the left of thumb */}
             <div
-              className={`absolute left-7 -translate-y-1/2 bg-slate-900 text-white font-mono text-[10px] font-bold px-2 py-0.5 rounded shadow-lg whitespace-nowrap pointer-events-none z-30 transition-opacity duration-150 ${
+              className={`absolute right-7 -translate-y-1/2 bg-slate-900 text-white font-mono text-[10px] font-bold px-2 py-0.5 rounded shadow-lg whitespace-nowrap pointer-events-none z-30 transition-opacity duration-150 ${
                 isScrubbingLoad || hoverLoadRatio !== null ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
               }`}
               style={{ bottom: `calc(${loadPct}% - 7px)` }}
@@ -2493,7 +2806,7 @@ export const BeamCanvas: React.FC<BeamCanvasProps> = ({
 
           <span className="font-mono text-[9px] text-slate-400 mt-0.5 font-semibold">0 N</span>
 
-          {/* Play animation button below the load slider on the left hand side of the graph */}
+          {/* Play animation button below the load slider on the right hand side of the graph */}
           {onTogglePlay && (
             <button
               onClick={onTogglePlay}
@@ -2511,8 +2824,8 @@ export const BeamCanvas: React.FC<BeamCanvasProps> = ({
       )}
 
       {/* 2. Overlays inside Diagram Window: Colored Scale & Cross Section Player */}
-      {/* A. Colored Scale (Centered with beam centerline, positioned much closer to beam, hidden in geometry mode) */}
-      {!isGeometryMode && (
+      {/* A. Colored Scale (Centered with beam centerline, positioned much closer to beam, hidden in geometry mode or comparison rows) */}
+      {!isComparison && !isGeometryMode && (
         <div
           className="absolute z-20 pointer-events-none transition-all duration-200"
           style={{
@@ -2527,8 +2840,8 @@ export const BeamCanvas: React.FC<BeamCanvasProps> = ({
             <StressLegend
               colormap={config.colormap}
               visualizeMode={config.visualizeMode}
-              refMaxStress={analysis.refNormalStressMpa}
-              refMaxStrainMicro={analysis.refNormalStrainMicro}
+              refMaxStress={refMaxStressMpa ?? analysis.refNormalStressMpa}
+              refMaxStrainMicro={refMaxStrainMicro ?? analysis.refNormalStrainMicro}
               materialName={config.material.name}
               currentStress={isBending ? analysis.maxNormalStressMpa : analysis.axialStressMpa}
               currentStrainMicro={isBending ? analysis.maxNormalStrainMicro : analysis.axialStrainMicro}
@@ -2538,7 +2851,7 @@ export const BeamCanvas: React.FC<BeamCanvasProps> = ({
       )}
 
       {/* B. Cross-Section Player (Size exactly equal to beam's length and aligned with Point A & Point B) */}
-      {showCrossSectionSlider && (
+      {!isComparison && showCrossSectionSlider && (
         <div
           className="absolute z-20 pointer-events-auto transition-all duration-150"
           style={{

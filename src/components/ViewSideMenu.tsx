@@ -11,7 +11,15 @@ import {
   Box,
   Eye,
 } from 'lucide-react';
-import { MomentIcon, VectorIcon, DeflectionIcon, CoordinateIcon } from './EngineeringIcons';
+import {
+  MomentIcon,
+  VectorIcon,
+  DeflectionIcon,
+  CoordinateIcon,
+  InertiaIcon,
+  StressStrainGraphIcon,
+  LoadDeflectionGraphIcon,
+} from './EngineeringIcons';
 import { BeamAnalysisResult, BeamConfig } from '../types/beam';
 
 interface ViewSideMenuProps {
@@ -51,6 +59,17 @@ export const ViewSideMenu: React.FC<ViewSideMenuProps> = ({
       icon: <Box className="w-4 h-4" />,
       activeClasses: 'bg-rose-50 text-rose-600 border-rose-200 shadow-2xs',
       iconColor: 'text-rose-600',
+    },
+    {
+      id: 'inertia',
+      title: 'Second Moment of Area (I)',
+      subtitle: 'Show or hide the cross-sectional second moment of area I in m⁴ for each beam shape',
+      readout: `I = ${(analysis.secondMomentOfAreaM4 ?? analysis.secondMomentOfAreaMm4 * 1e-12).toExponential(3)} m⁴`,
+      active: !!config.showInertia,
+      onToggle: () => onChange({ showInertia: !config.showInertia }),
+      icon: <InertiaIcon className="w-4 h-4" />,
+      activeClasses: 'bg-violet-50 text-violet-700 border-violet-200 shadow-2xs',
+      iconColor: 'text-violet-700',
     },
     {
       id: 'dimensions',
@@ -134,29 +153,50 @@ export const ViewSideMenu: React.FC<ViewSideMenuProps> = ({
       activeClasses: 'bg-emerald-50 text-emerald-600 border-emerald-200 shadow-2xs',
       iconColor: 'text-emerald-600',
     },
+    {
+      id: 'stress_strain_graph',
+      title: 'Stress vs Strain Graph (σ–ε)',
+      subtitle: 'Top-surface max stress & strain (y = d/2) at section plane x across loading intervals up to max load',
+      readout: `x = ${Math.round(config.crossSectionPlaneX)} mm · y = ${(config.thicknessMm / 2).toFixed(1)} mm`,
+      active: !!config.showStressStrainGraph,
+      onToggle: () => onChange({ showStressStrainGraph: !config.showStressStrainGraph }),
+      icon: <StressStrainGraphIcon className="w-5 h-5" />,
+      activeClasses: 'bg-sky-50 text-sky-700 border-sky-200 shadow-2xs',
+      iconColor: 'text-sky-700',
+    },
+    {
+      id: 'load_deflection_graph',
+      title: 'Load vs Deflection Graph (W–δ)',
+      subtitle: 'Load vs deflection (m) at section plane x across loading intervals up to max load',
+      readout: `x = ${Math.round(config.crossSectionPlaneX)} mm · ΔW = ${config.loadStepN || 1} N`,
+      active: !!config.showLoadDeflectionGraph,
+      onToggle: () => onChange({ showLoadDeflectionGraph: !config.showLoadDeflectionGraph }),
+      icon: <LoadDeflectionGraphIcon className="w-5 h-5" />,
+      activeClasses: 'bg-red-50 text-red-600 border-red-200 shadow-2xs',
+      iconColor: 'text-red-600',
+    },
   ];
 
   return (
-    <aside
+    <nav
       aria-label="View Overlays Menu"
-      className="absolute right-3.5 top-1/2 -translate-y-1/2 z-30 select-none pointer-events-auto"
+      className={`w-full border-b px-5 py-1.5 flex items-center justify-start relative z-20 select-none ${
+        isDark
+          ? 'bg-slate-900 border-slate-800 text-slate-100'
+          : 'bg-slate-50/95 border-slate-200 text-slate-800'
+      }`}
     >
-      <div
-        className={`flex flex-col items-center gap-1.5 p-1.5 rounded-2xl border shadow-lg backdrop-blur-md transition-all ${
-          isDark
-            ? 'bg-slate-900/90 border-slate-700/80 text-slate-100 shadow-black/40'
-            : 'bg-white/95 border-slate-200/90 text-slate-800 shadow-slate-900/10'
-        }`}
-      >
-        {/* Subtle Side Menu Label */}
+      <div className="w-full flex items-center justify-start flex-wrap gap-1.5 max-w-[1440px]">
+        {/* Subtle Horizontal Menu Label */}
         <div
           title="View Overlays & Displays"
-          className="w-8 h-6 flex items-center justify-center text-slate-400 dark:text-slate-500 mb-0.5"
+          className="flex items-center gap-1.5 w-6 sm:w-24 pr-2.5 mr-0.5 border-r border-slate-200 dark:border-slate-700 text-slate-500 shrink-0"
         >
-          <Eye className="w-3.5 h-3.5" />
+          <Eye className="w-3.5 h-3.5 shrink-0" />
+          <span className="text-[10px] font-bold uppercase tracking-wider hidden sm:inline whitespace-nowrap">
+            View
+          </span>
         </div>
-
-        <div className="w-5 h-px bg-slate-200 dark:bg-slate-700 mb-0.5" />
 
         {/* View Option Icon Buttons */}
         {viewOptions.map((opt) => (
@@ -165,10 +205,10 @@ export const ViewSideMenu: React.FC<ViewSideMenuProps> = ({
               onClick={opt.onToggle}
               aria-label={opt.title}
               aria-pressed={opt.active}
-              className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all duration-150 border cursor-pointer ${
+              className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all duration-150 border cursor-pointer ${
                 opt.active
                   ? `opacity-100 ${opt.activeClasses}`
-                  : 'opacity-35 hover:opacity-85 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100/80 dark:hover:bg-slate-800/80 border-transparent'
+                  : 'opacity-35 hover:opacity-85 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-slate-800/80 border-transparent'
               }`}
             >
               <span className={opt.active ? opt.iconColor : 'text-current'}>
@@ -176,15 +216,15 @@ export const ViewSideMenu: React.FC<ViewSideMenuProps> = ({
               </span>
             </button>
 
-            {/* Hover Tooltip / Flyout Info Card (positioned to the left of the side menu) */}
+            {/* Hover Tooltip / Flyout Info Card (positioned below the horizontal menu) */}
             <div
               role="tooltip"
-              className="absolute right-full mr-3.5 top-1/2 -translate-y-1/2 pointer-events-none opacity-0 group-hover:opacity-100 translate-x-1.5 group-hover:translate-x-0 transition-all duration-150 z-50 w-64"
+              className="absolute top-full mt-2.5 left-1/2 -translate-x-1/2 pointer-events-none opacity-0 group-hover:opacity-100 -translate-y-1 group-hover:translate-y-0 transition-all duration-150 z-50 w-64"
             >
               <div className="bg-slate-900/95 text-white backdrop-blur-md rounded-xl p-3 shadow-xl border border-slate-700/80 text-left relative">
-                {/* Right-pointing triangle arrow */}
+                {/* Upward-pointing triangle arrow */}
                 <div
-                  className="absolute left-full top-1/2 -translate-y-1/2 w-0 h-0 border-y-[5px] border-y-transparent border-l-[6px] border-l-slate-900/95"
+                  className="absolute bottom-full left-1/2 -translate-x-1/2 w-0 h-0 border-x-[5px] border-x-transparent border-b-[6px] border-b-slate-900/95"
                   aria-hidden="true"
                 />
 
@@ -227,6 +267,6 @@ export const ViewSideMenu: React.FC<ViewSideMenuProps> = ({
           </div>
         ))}
       </div>
-    </aside>
+    </nav>
   );
 };

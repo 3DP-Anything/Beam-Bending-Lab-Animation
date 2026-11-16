@@ -23,11 +23,13 @@ export function generateBeamSvg(
   config: BeamConfig,
   analysis: BeamAnalysisResult,
   width = 960,
-  height = 540
+  height = 540,
+  rectRefAnalysis?: BeamAnalysisResult
 ): string {
   const isBending = config.testType === 'bending';
   const isStrain = config.visualizeMode === 'strain';
-  const fixedRefMax = isStrain ? analysis.refNormalStrainMicro : analysis.refNormalStressMpa;
+  const scaleRef = rectRefAnalysis ?? analysis;
+  const fixedRefMax = isStrain ? scaleRef.refNormalStrainMicro : scaleRef.refNormalStressMpa;
 
   const L_m = config.lengthMm / 1000;
   const d_m = config.thicknessMm / 1000;
@@ -38,7 +40,7 @@ export function generateBeamSvg(
   const rightMargin = isBending ? Math.max(120, width * 0.13) : tensionRightReserved;
   const beamDrawLength = Math.max(160, width - originX - rightMargin);
 
-  const beamCenterY = height * 0.36;
+  const beamCenterY = height * 0.34;
   const beamDrawThickness = Math.max(24, Math.min(64, height * 0.09));
 
   const originY = beamCenterY;
@@ -49,6 +51,8 @@ export function generateBeamSvg(
   const undefBotY = originY + beamDrawThickness / 2;
 
   let elementsSvg = '';
+  let lowestCenterObstructionY = fixedPointAY + 28;
+  let momentBottomLimit = fixedPointAY;
 
   // 1. Background
   elementsSvg += `
@@ -59,7 +63,11 @@ export function generateBeamSvg(
   const testName = isBending ? '3-Point Bending Test' : 'Uniaxial Tension Test';
   const modeStr = config.visualizeMode === 'geometry' ? 'Geometry' : (isStrain ? 'Strain (ε)' : 'Stress (σ)');
   const matName = config.material.name.split(' (')[0];
-  const dimsStr = `${config.lengthMm} × ${config.widthMm} × ${config.thicknessMm} mm`;
+  const pType = config.profileType || 'solid_rectangle';
+  const isCircShape = pType === 'solid_circle' || pType === 'hollow_circle';
+  const dimsStr = isCircShape
+    ? `${config.lengthMm} mm × Ø${parseFloat(config.thicknessMm.toFixed(2))} mm${pType === 'hollow_circle' ? ` (t=${parseFloat((config.wallThicknessMm || 1).toFixed(2))}mm)` : ''}`
+    : `${config.lengthMm} × ${parseFloat(config.widthMm.toFixed(1))} × ${parseFloat(config.thicknessMm.toFixed(1))} mm`;
 
   elementsSvg += `
     <!-- Graphic Window Title -->
@@ -93,12 +101,12 @@ export function generateBeamSvg(
       ? Math.round(config.crossSectionPlaneX)
       : Math.round(config.lengthMm / 2);
 
-    const sliderRightX = 68;
+    const sliderRightX = 84;
     const beamStartX = originX;
     const csCenterX = Math.round((sliderRightX + beamStartX) / 2);
     const aspect = config.widthMm / Math.max(1, config.thicknessMm);
-    const maxCsW = Math.max(20, Math.min(48, (beamStartX - sliderRightX) * 0.4));
-    const csWidth = Math.max(20, Math.min(44, Math.min(maxCsW, Math.round(beamDrawThickness * aspect))));
+    const maxCsW = Math.max(20, Math.min(54, (beamStartX - sliderRightX) * 0.44));
+    const csWidth = Math.max(10, Math.min(maxCsW, Math.round(beamDrawThickness * aspect)));
     const csLeft = Math.round(csCenterX - csWidth / 2);
     const csTop = undefTopY;
     const csHeight = beamDrawThickness;
@@ -112,10 +120,47 @@ export function generateBeamSvg(
       </g>
     `;
 
-    // Slices or neutral fill
+    // Profile clip & outline paths matching canvas rendering
+    const radius = csHeight / 2;
+    let clipGeometrySvg = `<rect x="${csLeft}" y="${csTop}" width="${csWidth}" height="${csHeight}" />`;
+    let outlineSvg = `<rect x="${csLeft}" y="${csTop}" width="${csWidth}" height="${csHeight}" fill="none" stroke="#0f172a" stroke-width="1.5" />`;
+
+    if (pType === 'solid_circle') {
+      clipGeometrySvg = `<circle cx="${csCenterX}" cy="${originY}" r="${radius}" />`;
+      outlineSvg = `<circle cx="${csCenterX}" cy="${originY}" r="${radius}" fill="none" stroke="#0f172a" stroke-width="1.5" />`;
+    } else if (pType === 'hollow_circle') {
+      const tRatio = Math.min(0.4, (config.wallThicknessMm || 1) / Math.max(0.1, config.thicknessMm));
+      const inRadius = Math.max(1, radius * (1 - tRatio * 2));
+      const ringPath = `M ${csCenterX - radius},${originY} A ${radius},${radius} 0 1,0 ${csCenterX + radius},${originY} A ${radius},${radius} 0 1,0 ${csCenterX - radius},${originY} Z M ${csCenterX - inRadius},${originY} A ${inRadius},${inRadius} 0 1,1 ${csCenterX + inRadius},${originY} A ${inRadius},${inRadius} 0 1,1 ${csCenterX - inRadius},${originY} Z`;
+      clipGeometrySvg = `<path d="${ringPath}" clip-rule="evenodd" />`;
+      outlineSvg = `
+        <circle cx="${csCenterX}" cy="${originY}" r="${radius}" fill="none" stroke="#0f172a" stroke-width="1.5" />
+        <circle cx="${csCenterX}" cy="${originY}" r="${inRadius}" fill="none" stroke="#0f172a" stroke-width="1.5" />
+      `;
+    } else if (pType === 'i_beam') {
+      const tfRatio = Math.min(0.3, (config.flangeThicknessMm || 1) / Math.max(0.1, config.thicknessMm));
+      const twRatio = Math.min(0.4, (config.webThicknessMm || 1) / Math.max(0.1, config.widthMm));
+      const tfPx = Math.max(2, csHeight * tfRatio);
+      const twPx = Math.max(2, csWidth * twRatio);
+      const wL = csCenterX - twPx / 2;
+      const wR = csCenterX + twPx / 2;
+      const iPath = `M ${csLeft},${csTop} L ${csLeft + csWidth},${csTop} L ${csLeft + csWidth},${csTop + tfPx} L ${wR},${csTop + tfPx} L ${wR},${csBot - tfPx} L ${csLeft + csWidth},${csBot - tfPx} L ${csLeft + csWidth},${csBot} L ${csLeft},${csBot} L ${csLeft},${csBot - tfPx} L ${wL},${csBot - tfPx} L ${wL},${csTop + tfPx} L ${csLeft},${csTop + tfPx} Z`;
+      clipGeometrySvg = `<path d="${iPath}" />`;
+      outlineSvg = `<path d="${iPath}" fill="none" stroke="#0f172a" stroke-width="1.5" />`;
+    }
+
+    // Slices or neutral fill inside clipped cross section
     const numSlices = 60;
     const sliceH = csHeight / numSlices;
-    elementsSvg += `<g id="left-view-cross-section">`;
+    elementsSvg += `
+      <defs>
+        <clipPath id="left-view-clip">
+          ${clipGeometrySvg}
+        </clipPath>
+      </defs>
+      <g id="left-view-cross-section">
+        <g clip-path="url(#left-view-clip)">
+    `;
     if (config.visualizeMode !== 'geometry') {
       for (let i = 0; i < numSlices; i++) {
         const v = (i + 0.5) / numSlices;
@@ -134,7 +179,7 @@ export function generateBeamSvg(
         }
 
         const sliceColor = getStressColor(Math.abs(signedVal), fixedRefMax, config.colormap, signedVal);
-        elementsSvg += `<rect x="${csLeft}" y="${csTop + i * sliceH}" width="${csWidth}" height="${sliceH + 0.5}" fill="${sliceColor}" />`;
+        elementsSvg += `<rect x="${csLeft - 2}" y="${csTop + i * sliceH}" width="${csWidth + 4}" height="${sliceH + 0.6}" fill="${sliceColor}" />`;
       }
     } else {
       elementsSvg += `
@@ -143,14 +188,15 @@ export function generateBeamSvg(
             <line x1="0" y1="0" x2="0" y2="8" stroke="#64748b" stroke-width="1" />
           </pattern>
         </defs>
-        <rect x="${csLeft}" y="${csTop}" width="${csWidth}" height="${csHeight}" fill="#f8fafc" />
-        <rect x="${csLeft}" y="${csTop}" width="${csWidth}" height="${csHeight}" fill="url(#sectionHatch)" />
+        <rect x="${csLeft - 2}" y="${csTop - 2}" width="${csWidth + 4}" height="${csHeight + 4}" fill="#f8fafc" />
+        <rect x="${csLeft - 2}" y="${csTop - 2}" width="${csWidth + 4}" height="${csHeight + 4}" fill="url(#sectionHatch)" />
       `;
     }
+    elementsSvg += `</g>`;
 
     // Outline and neutral axis
     elementsSvg += `
-      <rect x="${csLeft}" y="${csTop}" width="${csWidth}" height="${csHeight}" fill="none" stroke="#0f172a" stroke-width="1.5" />
+      ${outlineSvg}
       ${config.showNeutralAxis ? `<line x1="${csLeft - 3}" y1="${originY}" x2="${csLeft + csWidth + 3}" y2="${originY}" stroke="${config.visualizeMode !== 'geometry' && config.colormap !== 'tension_compression' ? '#ffffff' : '#10b981'}" stroke-width="${config.visualizeMode !== 'geometry' && config.colormap !== 'tension_compression' ? '2' : '1.5'}" stroke-dasharray="4,2" />` : ''}
       <text x="${csCenterX}" y="${csTop - 18}" font-family="Inter, system-ui, sans-serif" font-size="9.5" font-weight="bold" fill="#0f172a" text-anchor="middle">Left View</text>
       <text x="${csCenterX}" y="${csTop - 7}" font-family="'JetBrains Mono', monospace" font-size="8.5" fill="${isSectionActive ? '#9333ea' : '#64748b'}" text-anchor="middle">x = ${evalX_mm}mm${isSectionActive ? '' : ' (Mid)'}</text>
@@ -162,7 +208,7 @@ export function generateBeamSvg(
         <polygon points="${csLeft},${csBot + 20} ${csLeft + 5},${csBot + 17.5} ${csLeft + 5},${csBot + 22.5}" fill="#0284c7" />
         <polygon points="${csLeft + csWidth},${csBot + 20} ${csLeft + csWidth - 5},${csBot + 17.5} ${csLeft + csWidth - 5},${csBot + 22.5}" fill="#0284c7" />
         <rect x="${csCenterX - 35}" y="${csBot + 24}" width="70" height="15" rx="3" fill="rgba(255,255,255,0.95)" stroke="#0284c7" stroke-width="1" />
-        <text x="${csCenterX}" y="${csBot + 35}" font-family="'JetBrains Mono', monospace" font-size="9" font-weight="bold" fill="#0284c7" text-anchor="middle">b = ${config.widthMm} mm</text>
+        <text x="${csCenterX}" y="${csBot + 35}" font-family="'JetBrains Mono', monospace" font-size="9" font-weight="bold" fill="#0284c7" text-anchor="middle">b = ${parseFloat(config.widthMm.toFixed(1))} mm</text>
       ` : ''}
       ${config.colormap === 'tension_compression' && config.visualizeMode !== 'geometry' ? (() => {
         const unitStr = isStrain ? 'με' : 'MPa';
@@ -205,6 +251,8 @@ export function generateBeamSvg(
           `;
         }
       })() : ''}
+      <text x="${csCenterX}" y="${config.showDimensionLines ? csBot + 50 : csBot + 18}" font-family="'JetBrains Mono', monospace" font-size="9" font-weight="600" fill="#0f172a" text-anchor="middle" dominant-baseline="middle">A = ${analysis.crossSectionAreaMm2.toFixed(1)} mm²</text>
+      ${config.showInertia ? `<text x="${csCenterX}" y="${config.showDimensionLines ? csBot + 63 : (!isBending ? csBot + 48 : csBot + 31)}" font-family="'JetBrains Mono', monospace" font-size="9" font-weight="600" fill="#6d28d9" text-anchor="middle" dominant-baseline="middle">I = ${(analysis.secondMomentOfAreaM4 ?? analysis.secondMomentOfAreaMm4 * 1e-12).toExponential(3)} m⁴</text>` : ''}
     </g>`;
   }
 
@@ -225,7 +273,12 @@ export function generateBeamSvg(
     const maxPhysicalDeflM = Math.abs(analysis.maxDeflectionMm) / 1000;
     const maxAllowedPixels = height * 0.22;
     const nominalScale = maxPhysicalDeflM > 0 ? maxAllowedPixels / Math.max(0.002, maxPhysicalDeflM) : 1;
-    const pixelDeflectionMultiplier = nominalScale * 0.08 * config.scaleFactor;
+    const rawMultiplier = nominalScale * 0.08 * config.scaleFactor;
+    const maxCapDeflPx = config.showMomentOnGraph ? height * 0.125 : height * 0.21;
+    const rawMidDeflPx = maxPhysicalDeflM * rawMultiplier;
+    const pixelDeflectionMultiplier = (rawMidDeflPx > maxCapDeflPx && maxPhysicalDeflM > 0)
+      ? (maxCapDeflPx / maxPhysicalDeflM)
+      : rawMultiplier;
 
     const numSlicesX = 240;
     const numLayersY = 36;
@@ -304,6 +357,13 @@ export function generateBeamSvg(
       }
       elementsSvg += `</g>`;
     }
+
+    // Track actual lowest bottom Y of the deflected beam
+    let maxBeamBotY = fixedPointAY;
+    for (let i = 0; i <= numSlicesX; i++) {
+      if (grid[i][0].y > maxBeamBotY) maxBeamBotY = grid[i][0].y;
+    }
+    lowestCenterObstructionY = Math.max(lowestCenterObstructionY, maxBeamBotY);
 
     // Beam Outer Border
     let borderPts = '';
@@ -439,6 +499,8 @@ export function generateBeamSvg(
         const isNearMid = Math.abs(uPlane - 0.5) < 0.12;
         const badgeY = isNearMid ? secMomentY + 34 : secMomentY + 16;
         const mText = `M(${planeXMm.toFixed(0)}mm) = ${momentAtSectionNm.toFixed(2)} N·m`;
+        momentBottomLimit = Math.max(momentBottomLimit, peakY + 24, badgeY + 14);
+        lowestCenterObstructionY = Math.max(lowestCenterObstructionY, momentBottomLimit);
 
         elementsSvg += `
           <g>
@@ -455,6 +517,8 @@ export function generateBeamSvg(
         `;
       } else {
         const midBot = grid[midIdx][0];
+        momentBottomLimit = Math.max(momentBottomLimit, midBot.y + 22);
+        lowestCenterObstructionY = Math.max(lowestCenterObstructionY, momentBottomLimit);
         elementsSvg += `
           <g stroke="#6366f1" stroke-dasharray="4,3" stroke-width="1.5">
             <line x1="${fixedPointAX}" y1="${fixedPointAY}" x2="${grid[numSlicesX][0].x}" y2="${grid[numSlicesX][0].y}" />
@@ -638,6 +702,7 @@ export function generateBeamSvg(
         const botLabelY = planeBotY + 16;
         const botLabelX = isLeftOfCenter ? planeBotX - 16 : planeBotX + 16;
         const tensBadgeX = isLeftOfCenter ? botLabelX - 110 : botLabelX - 4;
+        lowestCenterObstructionY = Math.max(lowestCenterObstructionY, botLabelY + 10);
 
         elementsSvg += `
           <!-- Compression label above -->
@@ -790,25 +855,12 @@ export function generateBeamSvg(
   // -----------------------------------------------------------------
   // 5. STRESS / STRAIN SCALE & CROSS-SECTION SCALE (PROPER VERTICAL CLEARANCE)
   // -----------------------------------------------------------------
-  let momentBottomLimit = fixedPointAY;
-  if (isBending && config.showMomentOnGraph) {
-    const hasMoment = analysis.maxBendingMomentNm > 0.0001;
-    const refM = Math.max(0.01, analysis.refBendingMomentNm || (config.maxLoadN * L_m) / 4);
-    const maxMomentScalePx = hasMoment ? Math.min(80, (analysis.maxBendingMomentNm / refM) * 65) : 0;
-    const maxPhysicalDeflM = Math.abs(analysis.maxDeflectionMm) / 1000;
-    const maxAllowedPixels = height * 0.22;
-    const nominalScale = maxPhysicalDeflM > 0 ? maxAllowedPixels / Math.max(0.002, maxPhysicalDeflM) : 1;
-    const pixelDeflectionMultiplier = nominalScale * 0.08 * config.scaleFactor;
-    const midDeflPx = Math.abs(analysis.maxDeflectionMm / 1000) * pixelDeflectionMultiplier;
-    const peakY = fixedPointAY + midDeflPx + maxMomentScalePx;
-    // Account for Mmax label at peakY + 16 and moment badges
-    momentBottomLimit = hasMoment ? (peakY + 36) : (fixedPointAY + midDeflPx + 26);
-  }
-
-  // Generous clearance for colored scale so Mmax text and moment curve are completely unobstructed
-  const scaleY = isBending && config.showMomentOnGraph
-    ? Math.max(fixedPointAY + 152, momentBottomLimit + 36)
-    : (fixedPointAY + 56);
+  const hasCsSlider = !!(config.showCrossSectionVectors || config.showMomentOnGraph);
+  const maxAllowedScaleY = hasCsSlider ? height - 100 : height - 36;
+  const scaleY = Math.min(
+    maxAllowedScaleY,
+    Math.max(fixedPointAY + 56, lowestCenterObstructionY + 32)
+  );
 
   if (config.visualizeMode !== 'geometry') {
     const scaleW = Math.min(360, width * 0.44);
@@ -860,8 +912,8 @@ export function generateBeamSvg(
   if (config.showCrossSectionVectors || config.showMomentOnGraph) {
     const isGeometry = config.visualizeMode === 'geometry';
     const csScaleY = isGeometry
-      ? (isBending && config.showMomentOnGraph ? Math.max(fixedPointAY + 145, momentBottomLimit + 26) : (fixedPointAY + 54))
-      : (scaleY + 74);
+      ? Math.min(height - 28, Math.max(fixedPointAY + 54, lowestCenterObstructionY + 26))
+      : Math.min(height - 28, scaleY + 72);
 
     const planeXMm = Math.max(0, Math.min(config.lengthMm, config.crossSectionPlaneX));
     const planeRatio = config.lengthMm > 0 ? planeXMm / config.lengthMm : 0;

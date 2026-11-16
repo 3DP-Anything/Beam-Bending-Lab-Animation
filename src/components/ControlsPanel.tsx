@@ -92,7 +92,7 @@ export const ControlsPanel: React.FC<ControlsPanelProps> = ({
               {config.material.name.split(' (')[0]} · {config.lengthMm} × {config.widthMm} × {config.thicknessMm} mm
             </div>
             <div className="text-[10px] text-slate-500 mt-0.5 font-mono">
-              I = {analysis.secondMomentOfAreaMm4.toFixed(1)} mm⁴ · ΔW = {step} N
+              I = {(analysis.secondMomentOfAreaM4 ?? analysis.secondMomentOfAreaMm4 * 1e-12).toExponential(3)} m⁴ · ΔW = {step} N
             </div>
           </div>
 

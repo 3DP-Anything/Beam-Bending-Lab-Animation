@@ -3,7 +3,66 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { BeamAnalysisResult, BeamConfig, MaterialProperties, StressColormap } from '../types/beam';
+import { BeamAnalysisResult, BeamConfig, BeamProfileType, MaterialProperties, StressColormap } from '../types/beam';
+
+export interface BeamShapeMeta {
+  type: BeamProfileType;
+  label: string;
+  shortLabel: string;
+  desc: string;
+  color: string;
+}
+
+export const BEAM_SHAPE_ORDER: BeamProfileType[] = [
+  'solid_rectangle',
+  'i_beam',
+  'solid_circle',
+  'hollow_circle',
+];
+
+export const BEAM_SHAPE_META: Record<BeamProfileType, BeamShapeMeta> = {
+  solid_rectangle: {
+    type: 'solid_rectangle',
+    label: 'Solid Rectangle',
+    shortLabel: 'Rectangle',
+    desc: 'Standard solid rectangular beam b × d',
+    color: '#0284c7',
+  },
+  i_beam: {
+    type: 'i_beam',
+    label: 'I-Beam (Flanged)',
+    shortLabel: 'I-Beam',
+    desc: 'Universal I-section with flanges & web',
+    color: '#7c3aed',
+  },
+  solid_circle: {
+    type: 'solid_circle',
+    label: 'Solid Circle',
+    shortLabel: 'Circle',
+    desc: 'Circular solid bar of diameter d',
+    color: '#d97706',
+  },
+  hollow_circle: {
+    type: 'hollow_circle',
+    label: 'Circular Tube (CHS)',
+    shortLabel: 'Tube',
+    desc: 'Circular hollow section with wall t',
+    color: '#e11d48',
+  },
+};
+
+export function getOrderedActiveShapes(config: BeamConfig): BeamProfileType[] {
+  const raw =
+    config.activeShapes && config.activeShapes.length > 0
+      ? config.activeShapes
+      : [config.profileType || 'solid_rectangle'];
+  const unique = Array.from(new Set(raw)).filter((s): s is BeamProfileType =>
+    BEAM_SHAPE_ORDER.includes(s)
+  );
+  if (unique.length === 0) return ['solid_rectangle'];
+  // Keep solid_rectangle as primary top beam whenever it is enabled, preserving canonical menu order
+  return BEAM_SHAPE_ORDER.filter((s) => unique.includes(s));
+}
 
 export const PRESET_MATERIALS: MaterialProperties[] = [
   {
@@ -107,24 +166,15 @@ export function computeProfileProperties(config: BeamConfig): ProfileSectionProp
   const pType = config.profileType || 'solid_rectangle';
   const b = Math.max(1, config.widthMm);
   const d = Math.max(1, config.thicknessMm);
-  const tw = Math.max(0.2, config.wallThicknessMm || 1.5);
-  const tf = Math.max(0.2, config.flangeThicknessMm || 1.5);
-  const tw_web = Math.max(0.2, config.webThicknessMm || 1.5);
+  const tw = Math.max(0.2, config.wallThicknessMm || 1);
+  const tf = Math.max(0.2, config.flangeThicknessMm || 1);
+  const tw_web = Math.max(0.2, config.webThicknessMm || 1);
 
   let areaMm2 = b * d;
   let I_mm4 = (b * Math.pow(d, 3)) / 12;
   let yMaxMm = d / 2;
 
   switch (pType) {
-    case 'hollow_rectangle': {
-      const t = Math.min(b / 2.5, Math.min(d / 2.5, tw));
-      const b_in = Math.max(0.1, b - 2 * t);
-      const d_in = Math.max(0.1, d - 2 * t);
-      areaMm2 = b * d - b_in * d_in;
-      I_mm4 = (b * Math.pow(d, 3) - b_in * Math.pow(d_in, 3)) / 12;
-      yMaxMm = d / 2;
-      break;
-    }
     case 'i_beam': {
       const actual_tf = Math.min(d / 3, tf);
       const actual_tw = Math.min(b / 2.5, tw_web);
@@ -150,22 +200,6 @@ export function computeProfileProperties(config: BeamConfig): ProfileSectionProp
       yMaxMm = D / 2;
       break;
     }
-    case 't_section': {
-      const actual_tf = Math.min(d / 3, tf);
-      const actual_tw = Math.min(b / 2.5, tw_web);
-      const hs = Math.max(0.1, d - actual_tf);
-      const A1 = b * actual_tf;
-      const y1 = d - actual_tf / 2;
-      const A2 = hs * actual_tw;
-      const y2 = hs / 2;
-      areaMm2 = A1 + A2;
-      const yBar = (A1 * y1 + A2 * y2) / areaMm2;
-      const I1 = (b * Math.pow(actual_tf, 3)) / 12 + A1 * Math.pow(y1 - yBar, 2);
-      const I2 = (actual_tw * Math.pow(hs, 3)) / 12 + A2 * Math.pow(y2 - yBar, 2);
-      I_mm4 = I1 + I2;
-      yMaxMm = Math.max(yBar, d - yBar);
-      break;
-    }
     case 'solid_rectangle':
     default: {
       areaMm2 = b * d;
@@ -187,6 +221,170 @@ export function computeProfileProperties(config: BeamConfig): ProfileSectionProp
     yMaxMm: safeYMaxMm,
     yMaxM: safeYMaxMm * 1e-3,
     sectionModulusMm3: safeI_mm4 / safeYMaxMm,
+  };
+}
+
+/**
+ * Computes new width (b) and height/thickness (d) for a given aspect ratio r = d / b
+ * while keeping the cross-sectional area constant.
+ */
+export function solveDimensionsForAspectRatio(
+  config: BeamConfig,
+  targetRatio: number,
+  targetAreaMm2: number
+): { widthMm: number; thicknessMm: number } {
+  const safeRatio = Math.max(0.1, Math.min(10, targetRatio));
+  const safeArea = Math.max(4, targetAreaMm2);
+  const pType = config.profileType || 'solid_rectangle';
+
+  if (pType === 'solid_rectangle') {
+    const b = Math.sqrt(safeArea / safeRatio);
+    const d = safeRatio * b;
+    return {
+      widthMm: Math.round(b * 100) / 100,
+      thicknessMm: Math.round(d * 100) / 100,
+    };
+  }
+
+  if (pType === 'solid_circle' || pType === 'hollow_circle') {
+    return {
+      widthMm: config.widthMm,
+      thicknessMm: config.thicknessMm,
+    };
+  }
+
+  let lo = 1.0;
+  let hi = 400.0;
+  for (let i = 0; i < 36; i++) {
+    const mid = (lo + hi) / 2;
+    const area = computeProfileProperties({
+      ...config,
+      widthMm: mid,
+      thicknessMm: mid * safeRatio,
+    }).areaMm2;
+    if (area < safeArea) {
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+  }
+  const bestB = (lo + hi) / 2;
+  const bestD = bestB * safeRatio;
+  return {
+    widthMm: Math.round(bestB * 100) / 100,
+    thicknessMm: Math.round(bestD * 100) / 100,
+  };
+}
+
+/**
+ * Returns a BeamConfig for targetShape whose cross-sectional area matches
+ * the rectangular reference beam (widthMm * thicknessMm).
+ * Circular profiles depend only on area and wall thickness, so their diameter
+ * remains constant when the rectangular aspect-ratio slider moves.
+ */
+export function getMatchedAreaShapeConfig(
+  rectConfig: BeamConfig,
+  targetShape: BeamProfileType
+): BeamConfig {
+  const targetAreaMm2 = Math.max(
+    1,
+    Math.max(1, rectConfig.widthMm) * Math.max(1, rectConfig.thicknessMm)
+  );
+  const wallT = Math.max(0.2, rectConfig.wallThicknessMm || 1);
+  const flangeT = Math.max(0.2, rectConfig.flangeThicknessMm || 1);
+  const webT = Math.max(0.2, rectConfig.webThicknessMm || 1);
+
+  if (targetShape === 'solid_rectangle') {
+    return {
+      ...rectConfig,
+      profileType: 'solid_rectangle',
+      wallThicknessMm: wallT,
+      flangeThicknessMm: flangeT,
+      webThicknessMm: webT,
+    };
+  }
+
+  if (targetShape === 'solid_circle') {
+    const D = Math.sqrt((4 * targetAreaMm2) / Math.PI);
+    const roundedD = Math.round(D * 100) / 100;
+    return {
+      ...rectConfig,
+      profileType: 'solid_circle',
+      widthMm: roundedD,
+      thicknessMm: roundedD,
+      wallThicknessMm: wallT,
+      flangeThicknessMm: flangeT,
+      webThicknessMm: webT,
+    };
+  }
+
+  if (targetShape === 'hollow_circle') {
+    let lo = 1.0;
+    let hi = Math.max(600, targetAreaMm2 / (Math.PI * 0.2) + 20);
+    for (let i = 0; i < 44; i++) {
+      const mid = (lo + hi) / 2;
+      const area = computeProfileProperties({
+        ...rectConfig,
+        profileType: 'hollow_circle',
+        widthMm: mid,
+        thicknessMm: mid,
+        wallThicknessMm: wallT,
+      }).areaMm2;
+      if (area < targetAreaMm2) {
+        lo = mid;
+      } else {
+        hi = mid;
+      }
+    }
+    const bestD = Math.round(((lo + hi) / 2) * 100) / 100;
+    return {
+      ...rectConfig,
+      profileType: 'hollow_circle',
+      widthMm: bestD,
+      thicknessMm: bestD,
+      wallThicknessMm: wallT,
+      flangeThicknessMm: flangeT,
+      webThicknessMm: webT,
+    };
+  }
+
+  // Remaining profile: i_beam (keep b/d equal to rectangular beam's b/d and solve for equal area)
+  const rectB = Math.max(1, rectConfig.widthMm);
+  const rectD = Math.max(1, rectConfig.thicknessMm);
+  const targetRatio = rectD / rectB; // d / b === rectD / rectB  <=>  b / d === rectB / rectD
+  let lo = 0.5;
+  const minThickness = Math.min(flangeT, webT);
+  let hi = Math.max(
+    1000,
+    (targetAreaMm2 / Math.max(0.2, minThickness)) * Math.max(1, 1 / Math.max(0.05, targetRatio)) + 100
+  );
+  for (let i = 0; i < 48; i++) {
+    const midB = (lo + hi) / 2;
+    const area = computeProfileProperties({
+      ...rectConfig,
+      profileType: 'i_beam',
+      widthMm: midB,
+      thicknessMm: midB * targetRatio,
+      wallThicknessMm: wallT,
+      flangeThicknessMm: flangeT,
+      webThicknessMm: webT,
+    }).areaMm2;
+    if (area < targetAreaMm2) {
+      lo = midB;
+    } else {
+      hi = midB;
+    }
+  }
+  const bestB = (lo + hi) / 2;
+  const bestD = bestB * targetRatio;
+  return {
+    ...rectConfig,
+    profileType: 'i_beam',
+    widthMm: Math.round(bestB * 100) / 100,
+    thicknessMm: Math.round(bestD * 100) / 100,
+    wallThicknessMm: wallT,
+    flangeThicknessMm: flangeT,
+    webThicknessMm: webT,
   };
 }
 

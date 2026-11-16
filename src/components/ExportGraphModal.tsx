@@ -16,7 +16,12 @@ import {
   Share2,
 } from 'lucide-react';
 import { BeamConfig } from '../types/beam';
-import { analyzeBeam } from '../utils/beamPhysics';
+import {
+  analyzeBeam,
+  BEAM_SHAPE_META,
+  getMatchedAreaShapeConfig,
+  getOrderedActiveShapes,
+} from '../utils/beamPhysics';
 import { generateBeamSvg } from '../utils/svgExporter';
 import { createGifFromCanvases, downloadBlob, recordVideoFromCanvas } from '../utils/gifExporter';
 
@@ -36,10 +41,26 @@ export const ExportGraphModal: React.FC<ExportGraphModalProps> = ({
   const [progressMsg, setProgressMsg] = useState<string>('');
   const [copiedSuccess, setCopiedSuccess] = useState<string | null>(null);
 
-  const analysis = useMemo(() => analyzeBeam(config), [config]);
+  const orderedShapes = useMemo(() => getOrderedActiveShapes(config), [config]);
+  const exportShape = orderedShapes.includes('solid_rectangle')
+    ? 'solid_rectangle'
+    : orderedShapes[0];
+  const exportConfig = useMemo(
+    () => getMatchedAreaShapeConfig(config, exportShape),
+    [config, exportShape]
+  );
+
+  const analysis = useMemo(() => analyzeBeam(exportConfig), [exportConfig]);
+  const rectRefAnalysis = useMemo(
+    () =>
+      exportShape === 'solid_rectangle'
+        ? analysis
+        : analyzeBeam(getMatchedAreaShapeConfig(config, 'solid_rectangle')),
+    [config, exportShape, analysis]
+  );
   const svgContent = useMemo(
-    () => (isOpen ? generateBeamSvg(config, analysis, 960, 540) : ''),
-    [isOpen, config, analysis]
+    () => (isOpen ? generateBeamSvg(exportConfig, analysis, 960, 540, rectRefAnalysis) : ''),
+    [isOpen, exportConfig, analysis, rectRefAnalysis]
   );
 
   if (!isOpen) return null;
@@ -47,7 +68,7 @@ export const ExportGraphModal: React.FC<ExportGraphModalProps> = ({
   // Handle SVG Download
   const handleDownloadSvg = () => {
     const blob = new Blob([svgContent], { type: 'image/svg+xml;charset=utf-8' });
-    const filename = `beam_${config.testType}_${config.visualizeMode}_${config.loadN}N.svg`;
+    const filename = `beam_${exportShape}_${exportConfig.testType}_${exportConfig.visualizeMode}_${exportConfig.loadN}N.svg`;
     downloadBlob(blob, filename);
   };
 
@@ -83,7 +104,7 @@ export const ExportGraphModal: React.FC<ExportGraphModalProps> = ({
 
           canvas.toBlob((blob) => {
             if (blob) {
-              const filename = `beam_${config.testType}_${config.visualizeMode}_${config.loadN}N.png`;
+              const filename = `beam_${exportShape}_${exportConfig.testType}_${exportConfig.visualizeMode}_${exportConfig.loadN}N.png`;
               downloadBlob(blob, filename);
             }
             setIsExporting(false);
@@ -157,10 +178,15 @@ export const ExportGraphModal: React.FC<ExportGraphModalProps> = ({
       for (let i = 0; i < framesCount; i++) {
         const wave = (Math.sin((i / framesCount) * 2 * Math.PI - Math.PI / 2) + 1) / 2;
         const currentLoad = Math.round(config.maxLoadN * wave);
-        const frameConf: BeamConfig = { ...config, loadN: currentLoad };
+        const frameBaseConf: BeamConfig = { ...config, loadN: currentLoad };
+        const frameConf = getMatchedAreaShapeConfig(frameBaseConf, exportShape);
         const frameAnalysis = analyzeBeam(frameConf);
+        const frameRectAnalysis =
+          exportShape === 'solid_rectangle'
+            ? frameAnalysis
+            : analyzeBeam(getMatchedAreaShapeConfig(frameBaseConf, 'solid_rectangle'));
 
-        const frameSvg = generateBeamSvg(frameConf, frameAnalysis, 960, 540);
+        const frameSvg = generateBeamSvg(frameConf, frameAnalysis, 960, 540, frameRectAnalysis);
         const img = new Image();
         const svgBlob = new Blob([frameSvg], { type: 'image/svg+xml;charset=utf-8' });
         const url = URL.createObjectURL(svgBlob);
@@ -190,7 +216,7 @@ export const ExportGraphModal: React.FC<ExportGraphModalProps> = ({
         height: 540,
         fps: 10,
       });
-      downloadBlob(gifBlob, `beam_${config.testType}_animated.gif`);
+      downloadBlob(gifBlob, `beam_${exportShape}_${exportConfig.testType}_animated.gif`);
       setIsExporting(false);
     } catch (err) {
       console.error(err);
@@ -279,7 +305,7 @@ export const ExportGraphModal: React.FC<ExportGraphModalProps> = ({
                 Export Preview (Includes Stress Scale & Active Options):
               </span>
               <span className="font-mono text-[11px]">
-                {config.material.name.split(' (')[0]} · W = {Math.round(config.loadN)} N
+                {BEAM_SHAPE_META[exportShape].shortLabel} · {exportConfig.material.name.split(' (')[0]} · W = {Math.round(exportConfig.loadN)} N
               </span>
             </div>
 
