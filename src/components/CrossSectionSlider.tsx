@@ -14,6 +14,8 @@ interface CrossSectionSliderProps {
   onChange: (updated: Partial<BeamConfig>) => void;
 }
 
+const SPAN_MARKERS_MM = [50, 100, 150, 200, 250, 300, 350];
+
 export const CrossSectionSlider: React.FC<CrossSectionSliderProps> = ({ config, analysis, onChange }) => {
   const currentX = Math.round(config.crossSectionPlaneX);
   const maxL = Math.max(1, config.lengthMm);
@@ -25,13 +27,20 @@ export const CrossSectionSlider: React.FC<CrossSectionSliderProps> = ({ config, 
   const maxM = analysis?.maxBendingMomentNm ?? ((config.loadN * (config.lengthMm / 1000)) / 4);
   const momentAtSectionNm = momentFrac * maxM;
 
+  const activeMarkers = SPAN_MARKERS_MM.filter((mm) => mm > 0 && mm < maxL);
+
   const handleStep = (deltaMm: number) => {
     const next = Math.max(0, Math.min(maxL, currentX + deltaMm));
     onChange({ crossSectionPlaneX: next });
   };
 
+  const handleSelectDistance = (mm: number) => {
+    const clamped = Math.max(0, Math.min(maxL, mm));
+    onChange({ crossSectionPlaneX: clamped });
+  };
+
   return (
-    <div className="w-full select-none flex flex-col gap-1 px-0">
+    <div className="w-full select-none flex flex-col gap-0.5 px-0">
       {/* Frameless Header with Label, Step Buttons, Position, and Bending Moment Readout */}
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5 min-w-0">
@@ -44,6 +53,7 @@ export const CrossSectionSlider: React.FC<CrossSectionSliderProps> = ({ config, 
         {/* Stepper buttons & position + bending moment readouts */}
         <div className="flex items-center gap-1.5 shrink-0">
           <button
+            type="button"
             onClick={() => handleStep(-10)}
             title="Step 10 mm left"
             className="w-5 h-5 rounded hover:bg-slate-200/80 text-slate-600 hover:text-purple-700 text-xs flex items-center justify-center cursor-pointer font-bold transition-colors"
@@ -68,6 +78,7 @@ export const CrossSectionSlider: React.FC<CrossSectionSliderProps> = ({ config, 
           )}
 
           <button
+            type="button"
             onClick={() => handleStep(10)}
             title="Step 10 mm right"
             className="w-5 h-5 rounded hover:bg-slate-200/80 text-slate-600 hover:text-purple-700 text-xs flex items-center justify-center cursor-pointer font-bold transition-colors"
@@ -77,29 +88,124 @@ export const CrossSectionSlider: React.FC<CrossSectionSliderProps> = ({ config, 
         </div>
       </div>
 
-      {/* Frameless Scrubber Track (Matching Load Slider Player Style) */}
-      <div className="relative flex items-center group py-1 cursor-pointer">
+      {/* Custom-aligned Scrubber Track with Track Ticks */}
+      <div className="relative h-4 flex items-center group cursor-pointer">
+        {/* Track rail */}
+        <div className="relative w-full h-1.5 group-hover:h-2 transition-all bg-slate-300 rounded-full">
+          {/* Active purple fill */}
+          <div
+            className="absolute left-0 top-0 bottom-0 bg-purple-600 rounded-full transition-all duration-75"
+            style={{ width: `${pct}%` }}
+          />
+          {/* Subtle marker dots on the rail */}
+          {activeMarkers.map((mm) => {
+            const mPct = (mm / maxL) * 100;
+            const isPassed = mm <= currentX;
+            return (
+              <span
+                key={`dot-${mm}`}
+                className={`absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-1 h-1 rounded-full pointer-events-none ${
+                  isPassed ? 'bg-white/90' : 'bg-slate-500/75'
+                }`}
+                style={{ left: `${mPct}%` }}
+              />
+            );
+          })}
+        </div>
+
+        {/* Thumb aligned exactly to pct% */}
+        <div
+          className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3.5 h-3.5 rounded-full bg-purple-600 border-2 border-white shadow-md shadow-purple-500/30 pointer-events-none group-hover:scale-115 transition-transform z-10"
+          style={{ left: `${pct}%` }}
+        />
+
+        {/* Accessible range input */}
         <input
           type="range"
           min="0"
           max={maxL}
           step="1"
           value={currentX}
+          aria-label="Cross-Section Plane Position in millimeters"
           onChange={(e) => onChange({ crossSectionPlaneX: parseFloat(e.target.value) || 0 })}
-          className="w-full h-1.5 group-hover:h-2 transition-all bg-slate-300 rounded-full appearance-none cursor-pointer accent-purple-600 focus:outline-none"
-          style={{
-            background: `linear-gradient(to right, rgb(147, 51, 234) 0%, rgb(147, 51, 234) ${pct}%, rgb(203, 213, 225) ${pct}%, rgb(203, 213, 225) 100%)`,
-          }}
+          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-20"
         />
       </div>
 
-      {/* Subtle Span Markers strictly aligned with Point A (left), L/2 (center), Point B (right) */}
-      <div className="flex justify-between items-center text-[9px] font-mono text-slate-400 px-0">
-        <span className="text-left font-semibold">Point A (0 mm)</span>
-        <span className="text-center">L/4 ({(maxL * 0.25).toFixed(0)} mm)</span>
-        <span className="text-center font-bold text-purple-600">L/2 ({(maxL * 0.5).toFixed(0)} mm)</span>
-        <span className="text-center">3L/4 ({(maxL * 0.75).toFixed(0)} mm)</span>
-        <span className="text-right font-semibold">Point B ({maxL} mm)</span>
+      {/* Clickable Ruler Markers (0, 50, 100, 150, 200, 250, 300, 350, maxL) */}
+      <div className="relative w-full h-7 text-[9px] font-mono">
+        {/* Point A (0 mm) */}
+        <button
+          type="button"
+          onClick={() => handleSelectDistance(0)}
+          title="Move cursor to Point A (0 mm)"
+          className={`absolute left-0 top-0 flex flex-col items-start cursor-pointer group/m transition-colors ${
+            currentX === 0 ? 'text-purple-700 font-bold' : 'text-slate-500 hover:text-purple-700'
+          }`}
+        >
+          <span
+            className={`w-[1.5px] h-1.5 mb-0.5 transition-colors ${
+              currentX === 0 ? 'bg-purple-600' : 'bg-slate-400 group-hover/m:bg-purple-500'
+            }`}
+          />
+          <span className={`px-0.5 rounded ${currentX === 0 ? 'bg-purple-100/90' : 'group-hover/m:bg-purple-50'}`}>
+            0<span className="hidden sm:inline">mm</span>
+          </span>
+        </button>
+
+        {/* Intermediate clickable markers at 50, 100, 150, 200, 250, 300, 350 mm */}
+        {activeMarkers.map((mm) => {
+          const mPct = (mm / maxL) * 100;
+          const isActive = currentX === mm;
+          return (
+            <button
+              key={mm}
+              type="button"
+              onClick={() => handleSelectDistance(mm)}
+              title={`Move cursor to ${mm} mm`}
+              style={{ left: `${mPct}%` }}
+              className={`absolute top-0 -translate-x-1/2 flex flex-col items-center cursor-pointer group/m transition-colors ${
+                isActive ? 'text-purple-700 font-bold' : 'text-slate-500 hover:text-purple-700'
+              }`}
+            >
+              <span
+                className={`w-[1.5px] mb-0.5 transition-colors ${
+                  isActive ? 'h-2 bg-purple-600' : 'h-1.5 bg-slate-400 group-hover/m:bg-purple-500'
+                }`}
+              />
+              <span
+                className={`px-1 rounded whitespace-nowrap leading-tight ${
+                  isActive
+                    ? 'bg-purple-100 text-purple-800 font-bold ring-1 ring-purple-300'
+                    : 'group-hover/m:bg-purple-50'
+                }`}
+              >
+                {mm}
+                <span className="hidden sm:inline">mm</span>
+              </span>
+            </button>
+          );
+        })}
+
+        {/* Point B (maxL mm) */}
+        <button
+          type="button"
+          onClick={() => handleSelectDistance(maxL)}
+          title={`Move cursor to Point B (${maxL} mm)`}
+          className={`absolute right-0 top-0 flex flex-col items-end cursor-pointer group/m transition-colors ${
+            currentX === maxL ? 'text-purple-700 font-bold' : 'text-slate-500 hover:text-purple-700'
+          }`}
+        >
+          <span
+            className={`w-[1.5px] h-1.5 mb-0.5 transition-colors ${
+              currentX === maxL ? 'bg-purple-600' : 'bg-slate-400 group-hover/m:bg-purple-500'
+            }`}
+          />
+          <span className={`px-0.5 rounded ${currentX === maxL ? 'bg-purple-100/90' : 'group-hover/m:bg-purple-50'}`}>
+            {maxL}
+            <span className="hidden sm:inline">mm</span>
+          </span>
+        </button>
       </div>
     </div>
   );
